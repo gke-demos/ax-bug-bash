@@ -1,0 +1,3 @@
+# Telemetry-Driven Root Triage and TDD Child Task Auto-Suspend Lifecycle
+
+When an Alertmanager webhook fires, the Root AX Task analyzes the production error traces to dynamically spawn one Child AX Task per implicated microservice via `ax-server` gRPC (`CreateTask` + `ResumeTask`) with failure context in `Task.spec.config`. Each Child Task executes a strict Red-Green TDD cycle—authoring a failing regression test that reproduces the production 500 error before patching the code—and uses the custom runner's `OnCommandExit` hook to report its Git patch and call `SuspendTask` so Agent Substrate v0.6.0 immediately reclaims worker CPU and memory slots.
