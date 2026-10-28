@@ -36,6 +36,10 @@ _Avoid_: Pre-existing e2e test, smoke check.
 The standalone 5-service polyglot e-commerce application (`Node.js`, `Go`, `Python`, `Rust`) that users interact with directly in the browser and where production 500 errors surface.
 _Avoid_: Embedded preview widget, mock store tab.
 
+**Hot-Reload Supervisor**:
+The in-pod process wrapper around each Retail Storefront microservice that tracks the canonical Git repository, incrementally rebuilds modified service code against pre-warmed caches, and swaps the live HTTP server without rescheduling the pod.
+_Avoid_: Sidecar deployer, CI/CD agent, rolling restart controller.
+
 **AX Observer**:
 The dedicated web interface that visualizes incoming monitoring alerts, the live recursive AX Task Tree across Agent Substrate v0.6.0 workers, per-service regression tests and Git patches, and live Kubernetes rollout status.
 _Avoid_: Chat portal, monolithic dashboard.
