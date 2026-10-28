@@ -34,6 +34,38 @@ func AllServices() []string {
 	}
 }
 
+// ServiceLanguage returns the canonical display language/framework label for a storefront microservice.
+func ServiceLanguage(service string) string {
+	switch service {
+	case ServiceStorefrontWeb:
+		return "Node.js / TypeScript"
+	case ServiceCheckout, ServiceShipping:
+		return "Go"
+	case ServicePricing:
+		return "Python / FastAPI"
+	case ServiceInventory:
+		return "Rust / Axum"
+	default:
+		return "Polyglot"
+	}
+}
+
+// ServiceCacheMount returns the pre-warmed build cache mount description for a storefront microservice.
+func ServiceCacheMount(service string) string {
+	switch service {
+	case ServiceStorefrontWeb:
+		return "/cache/node_modules (pre-warmed tsx/esbuild bundle)"
+	case ServiceCheckout, ServiceShipping:
+		return "/cache/gocache & /cache/gomodcache (incremental go build)"
+	case ServicePricing:
+		return "/cache/venv (pre-warmed wheel & bytecode cache)"
+	case ServiceInventory:
+		return "/cache/cargo-target (pre-warmed crate artifacts)"
+	default:
+		return "/cache/prewarmed"
+	}
+}
+
 // Product represents an item in the Retail Storefront catalog.
 type Product struct {
 	SKU                   string `json:"sku"`

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/gke-demos/ax-bug-bash/internal/gateway"
+	"github.com/gke-demos/ax-bug-bash/internal/httputil"
 	"github.com/gke-demos/ax-bug-bash/internal/observer"
 	"github.com/gke-demos/ax-bug-bash/internal/storefront"
 )
@@ -385,7 +387,7 @@ func verifyBaselineServicesCIGreen(ctx context.Context, repoDir string) (bool, e
 	scriptPath := filepath.Join(repoDir, "services", "run-service-tests.sh")
 	cmd := exec.CommandContext(ctx, "bash", scriptPath, "--all")
 	cmd.Dir = repoDir
-	cmd.Env = append(os.Environ(), "PATH=/usr/local/google/home/mofi/.local/go/bin:"+os.Getenv("PATH"))
+	cmd.Env = httputil.EnsureGoBinOnPath(os.Environ())
 	out, err := cmd.CombinedOutput()
 	baselineRan = true
 	if err != nil {
@@ -489,22 +491,27 @@ func RunScenarioTrajectory(ctx context.Context, spec TrajectorySpec) (Trajectory
 					return
 				}
 			}
+			reqBytes, _ := io.ReadAll(r.Body)
+			synthText := "[LIVE:Gemini Enterprise Agent Platform] " + gateway.SynthesizeFixtureText("live-eval", string(reqBytes))
+			respJSON, _ := json.Marshal(map[string]any{
+				"candidates": []map[string]any{
+					{
+						"content": map[string]any{
+							"role":  "model",
+							"parts": []map[string]any{{"text": synthText}},
+						},
+						"finishReason": "STOP",
+					},
+				},
+				"usageMetadata": map[string]any{
+					"promptTokenCount":     64,
+					"candidatesTokenCount": 48,
+					"totalTokenCount":      112,
+				},
+			})
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{
-				"candidates": [{
-					"content": {
-						"role": "model",
-						"parts": [{"text": "[LIVE:Gemini Enterprise Agent Platform] Verified regression test and service fix synthesized."}]
-					},
-					"finishReason": "STOP"
-				}],
-				"usageMetadata": {
-					"promptTokenCount": 64,
-					"candidatesTokenCount": 48,
-					"totalTokenCount": 112
-				}
-			}`))
+			_, _ = w.Write(respJSON)
 		}))
 		defer upstreamAgentPlatform.Close()
 
@@ -631,7 +638,8 @@ func RunScenarioTrajectory(ctx context.Context, spec TrajectorySpec) (Trajectory
 			ch.TaskConfig["service"] != expSvc ||
 			ch.TaskConfig["incident_id"] != sc.ID ||
 			ch.TaskConfig["role"] != "child-fixer" ||
-			ch.TaskConfig["regression_test_name"] == "" {
+			ch.TaskConfig["regression_test_name"] == "" ||
+			ch.TaskConfig["failing_request"] == nil {
 			selectiveOK = false
 			grade.FailureReasons = append(grade.FailureReasons, fmt.Sprintf("child %s missing structured Task.spec.config: %+v", ch.TaskName, ch.TaskConfig))
 		}

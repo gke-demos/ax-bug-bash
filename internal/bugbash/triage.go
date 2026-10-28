@@ -2,6 +2,7 @@ package bugbash
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,9 @@ import (
 	"github.com/google/ax/pkg/apis/v1alpha1"
 	"google.golang.org/protobuf/types/known/structpb"
 )
+
+// DefaultWorkspaceName is the canonical Workspace resource name matching manifests/ax/workspace.yaml.
+const DefaultWorkspaceName = "storefront-monorepo"
 
 // AlertPayload represents the incoming production incident alert and stack trace telemetry
 // passed to the Root Task via Task.spec.config.
@@ -29,19 +33,33 @@ type AlertPayload struct {
 
 // ChildTaskMission holds the per-service remediation mission stored in a Child Task's Task.spec.config.
 type ChildTaskMission struct {
-	TaskName           string `json:"task_name"`
-	ParentTask         string `json:"parent_task"`
-	IncidentID         string `json:"incident_id"`
-	Service            string `json:"service"`
-	Language           string `json:"language"`
-	Harness            string `json:"harness"`
-	RequestedModel     string `json:"requested_model"`
-	SourceFile         string `json:"source_file"`
-	TestFile           string `json:"test_file"`
-	ErrorType          string `json:"error_type"`
-	ErrorMessage       string `json:"error_message"`
-	StackTrace         string `json:"stack_trace"`
-	RegressionTestName string `json:"regression_test_name"`
+	TaskName           string         `json:"task_name"`
+	ParentTask         string         `json:"parent_task"`
+	IncidentID         string         `json:"incident_id"`
+	Service            string         `json:"service"`
+	Language           string         `json:"language"`
+	Harness            string         `json:"harness"`
+	RequestedModel     string         `json:"requested_model"`
+	SourceFile         string         `json:"source_file"`
+	TestFile           string         `json:"test_file"`
+	ErrorType          string         `json:"error_type"`
+	ErrorMessage       string         `json:"error_message"`
+	StackTrace         string         `json:"stack_trace"`
+	RegressionTestName string         `json:"regression_test_name"`
+	FailingRequest     map[string]any `json:"failing_request,omitempty"`
+}
+
+// CheckoutRequestToMap converts a typed CheckoutRequest into a structpb-compatible map[string]any.
+func CheckoutRequestToMap(req storefront.CheckoutRequest) map[string]any {
+	raw, err := json.Marshal(req)
+	if err != nil {
+		return map[string]any{}
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil || out == nil {
+		return map[string]any{}
+	}
+	return out
 }
 
 // TriagePlan is the output of the Root Task's stack-trace analysis.
@@ -206,6 +224,7 @@ func AnalyzeIncidentTraces(alert AlertPayload, workspaceDir string) (TriagePlan,
 	}
 	harnesses := ResolveChildHarnesses(orderedDetected, harnessMode)
 
+	failingReq := CheckoutRequestToMap(sc.TriggerCart)
 	childSpecs := make([]ChildTaskMission, 0, len(orderedDetected))
 	for i, svc := range orderedDetected {
 		detail := resolveServiceDetail(sc, alert, svc)
@@ -223,6 +242,7 @@ func AnalyzeIncidentTraces(alert AlertPayload, workspaceDir string) (TriagePlan,
 			ErrorMessage:       detail.ErrorMessage,
 			StackTrace:         detail.StackTrace,
 			RegressionTestName: detail.RegressionTestName,
+			FailingRequest:     failingReq,
 		})
 	}
 
@@ -266,7 +286,7 @@ func SpawnChildTasksForTriage(
 	}
 	wsName := strings.TrimSpace(opts.WorkspaceName)
 	if wsName == "" {
-		wsName = "storefront-ws"
+		wsName = DefaultWorkspaceName
 	}
 	wsPath := strings.TrimSpace(opts.WorkspacePath)
 	if wsPath == "" {
@@ -342,6 +362,15 @@ func SpawnChildTasksForTriage(
 
 // ChildMissionToStruct serializes a ChildTaskMission into a protobuf Struct for Task.spec.config.
 func ChildMissionToStruct(m ChildTaskMission) (*structpb.Struct, error) {
+	failingReq := m.FailingRequest
+	if len(failingReq) == 0 && m.IncidentID != "" {
+		if sc, ok := storefront.GetScenario(m.IncidentID); ok {
+			failingReq = CheckoutRequestToMap(sc.TriggerCart)
+		}
+	}
+	if failingReq == nil {
+		failingReq = map[string]any{}
+	}
 	return structpb.NewStruct(map[string]any{
 		"role":                 "child-fixer",
 		"task_name":            m.TaskName,
@@ -357,6 +386,7 @@ func ChildMissionToStruct(m ChildTaskMission) (*structpb.Struct, error) {
 		"error_message":        m.ErrorMessage,
 		"stack_trace":          m.StackTrace,
 		"regression_test_name": m.RegressionTestName,
+		"failing_request":      failingReq,
 	})
 }
 
@@ -372,6 +402,10 @@ func ParseChildMissionFromTaskConfig(taskName string, cfg *structpb.Struct) (Chi
 		}
 		return ""
 	}
+	var failingReq map[string]any
+	if fr, ok := m["failing_request"].(map[string]any); ok {
+		failingReq = fr
+	}
 	out := ChildTaskMission{
 		TaskName:           str("task_name"),
 		ParentTask:         str("parent_task"),
@@ -386,6 +420,7 @@ func ParseChildMissionFromTaskConfig(taskName string, cfg *structpb.Struct) (Chi
 		ErrorMessage:       str("error_message"),
 		StackTrace:         str("stack_trace"),
 		RegressionTestName: str("regression_test_name"),
+		FailingRequest:     failingReq,
 	}
 	if out.TaskName == "" {
 		out.TaskName = taskName

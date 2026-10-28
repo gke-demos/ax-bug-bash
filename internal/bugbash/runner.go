@@ -9,10 +9,12 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/gke-demos/ax-bug-bash/internal/storefront"
 	"github.com/google/ax/pkg/apis/v1alpha1"
 	"github.com/google/ax/runner"
 	"google.golang.org/grpc"
@@ -178,10 +180,22 @@ func RunCustomTaskRunner(ctx context.Context, opts CustomRunnerOptions) error {
 	return runner.Run(runCtx, cfg)
 }
 
+// TaskExecutionOptions provides optional runtime hooks when ExecuteTaskFromMetadataEndpoint runs.
+type TaskExecutionOptions struct {
+	Storefront       *storefront.Runtime
+	AutoCompleteRoot bool
+	ModelGatewayURL  string
+}
+
 // ExecuteTaskFromMetadataEndpoint runs inside the supervised child process spawned by runner.Run.
 // It fetches the Task specification from $AX_METADATA_URL/metadata/v1alpha1/ax/task and executes
 // either the Root Triage fan-out ("root-triage") or the Child Fixer Red-Green TDD loop ("child-fixer").
-func ExecuteTaskFromMetadataEndpoint(ctx context.Context) error {
+func ExecuteTaskFromMetadataEndpoint(ctx context.Context, opts ...TaskExecutionOptions) error {
+	var opt TaskExecutionOptions
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+
 	metadataURL := strings.TrimSpace(os.Getenv("AX_METADATA_URL"))
 	task, err := FetchTaskFromMetadataURL(ctx, metadataURL)
 	if err != nil {
@@ -192,8 +206,17 @@ func ExecuteTaskFromMetadataEndpoint(ctx context.Context) error {
 	}
 
 	taskName := task.GetMetadata().GetName()
+	atespace := task.GetMetadata().GetAtespace()
+	if atespace == "" {
+		atespace = "default"
+	}
 	wsPath := task.GetSpec().WorkspacePath()
 	_ = os.MkdirAll(filepath.Join(wsPath, AXStateDirName), 0o755)
+
+	gwURL := strings.TrimSpace(opt.ModelGatewayURL)
+	if gwURL == "" {
+		gwURL = strings.TrimSpace(os.Getenv("MODEL_GATEWAY_URL"))
+	}
 
 	cfgStruct := task.GetSpec().GetConfig()
 	role := "child-fixer"
@@ -212,6 +235,8 @@ func ExecuteTaskFromMetadataEndpoint(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("analyzing incident traces: %w", err)
 		}
+		var axClient v1alpha1.AXClient
+		var spawnedTasks []*v1alpha1.Task
 		axAddr := strings.TrimSpace(os.Getenv("AX_SERVER_ADDR"))
 		if axAddr != "" {
 			conn, err := grpc.NewClient(axAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -219,14 +244,66 @@ func ExecuteTaskFromMetadataEndpoint(ctx context.Context) error {
 				return fmt.Errorf("dialing ax-server %s: %w", axAddr, err)
 			}
 			defer conn.Close()
-			axClient := v1alpha1.NewAXClient(conn)
-			_, err = SpawnChildTasksForTriage(ctx, axClient, taskName, plan, SpawnChildOptions{
-				Atespace:      task.GetMetadata().GetAtespace(),
+			axClient = v1alpha1.NewAXClient(conn)
+			spawnedTasks, err = SpawnChildTasksForTriage(ctx, axClient, taskName, plan, SpawnChildOptions{
+				Atespace:      atespace,
 				WorkspaceName: task.GetSpec().GetWorkspace().GetName(),
 				WorkspacePath: wsPath,
 			})
 			if err != nil {
 				return fmt.Errorf("spawning child tasks from root triage: %w", err)
+			}
+		}
+
+		// When running against a real Git workspace (with an origin remote) or when AutoCompleteRoot / Storefront is configured,
+		// complete the child TDD cycle, merge patches into wsPath, and push to origin.
+		if opt.AutoCompleteRoot || opt.Storefront != nil || os.Getenv("AX_AUTO_COMPLETE_ROOT") == "1" || hasGitOriginRemote(wsPath) {
+			if sc, ok := storefront.GetScenario(plan.IncidentID); ok {
+				childResults := make([]ChildTaskResult, 0, len(plan.ChildSpecs))
+				for i, spec := range plan.ChildSpecs {
+					if i < len(spawnedTasks) && spawnedTasks[i].GetMetadata().GetName() != "" {
+						spec.TaskName = spawnedTasks[i].GetMetadata().GetName()
+					}
+					spec.ParentTask = taskName
+
+					cWorkDir, cErr := cloneGitWorkspace(ctx, wsPath)
+					if cErr != nil {
+						continue
+					}
+					res, tddErr := ExecuteChildFixerTDD(ctx, ChildFixerConfig{
+						Mission:         spec,
+						WorkspaceDir:    cWorkDir,
+						ModelGatewayURL: gwURL,
+					})
+					_ = os.RemoveAll(cWorkDir)
+					if tddErr == nil {
+						_ = SaveTaskStateSnapshot(wsPath, res)
+						if axClient != nil {
+							_, _ = axClient.SuspendTask(ctx, &v1alpha1.SuspendTaskRequest{
+								Atespace: atespace,
+								Name:     spec.TaskName,
+							})
+						}
+						childResults = append(childResults, res)
+					}
+				}
+				if err := applyChildPatchesToRootWorkspace(ctx, wsPath, sc, plan.ImplicatedServices, childResults); err != nil {
+					return fmt.Errorf("applying child patches in root triage: %w", err)
+				}
+				if hasGitOriginRemote(wsPath) {
+					commitMsg := fmt.Sprintf("fix(%s): automated AX bug bash tree repair for %s", strings.ToLower(sc.ID), strings.Join(plan.ImplicatedServices, ", "))
+					if _, err := commitAndPushWorkspaceFix(ctx, wsPath, commitMsg); err != nil {
+						return fmt.Errorf("pushing root triage fix: %w", err)
+					}
+				}
+				if opt.Storefront != nil {
+					sfRepoDir := opt.Storefront.GitManager().RepoDir()
+					for _, svc := range plan.ImplicatedServices {
+						if storefront.IsServicePatchedForIncident(sfRepoDir, sc.ID, svc) || storefront.IsServicePatchedForIncident(wsPath, sc.ID, svc) {
+							opt.Storefront.MarkServiceHealed(sc.ID, svc)
+						}
+					}
+				}
 			}
 		}
 		return nil
@@ -236,13 +313,22 @@ func ExecuteTaskFromMetadataEndpoint(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("parsing child fixer mission: %w", err)
 	}
-	gwURL := strings.TrimSpace(os.Getenv("MODEL_GATEWAY_URL"))
 	_, err = ExecuteChildFixerTDD(ctx, ChildFixerConfig{
 		Mission:         mission,
 		WorkspaceDir:    wsPath,
 		ModelGatewayURL: gwURL,
 	})
 	return err
+}
+
+func hasGitOriginRemote(workDir string) bool {
+	if strings.TrimSpace(workDir) == "" {
+		return false
+	}
+	cmd := exec.Command("git", "remote", "get-url", "origin")
+	cmd.Dir = workDir
+	out, err := cmd.Output()
+	return err == nil && strings.TrimSpace(string(out)) != ""
 }
 
 // FetchTaskFromMetadataURL retrieves and parses the Task YAML from $AX_METADATA_URL/metadata/v1alpha1/ax/task

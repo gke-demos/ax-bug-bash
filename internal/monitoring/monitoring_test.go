@@ -392,6 +392,27 @@ func TestPreWarmedIncrementalRolloutBridgeHealsStorefrontAndResolvesAlertUnder10
 	if postResp.StatusCode != http.StatusOK {
 		t.Fatalf("expected HTTP 200 OK after incremental rollout, got %d", postResp.StatusCode)
 	}
+
+	// Verify RolloutBridge rejects RolloutTreeFix if the git workspace is not actually patched
+	unpatchedSF, err := storefront.NewRuntime(storefront.Config{
+		GitWorkDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewRuntime for unpatched check failed: %v", err)
+	}
+	if _, err := unpatchedSF.ActivateIncident(storefront.IncidentStackedPromoNegativeSubtotal); err != nil {
+		t.Fatalf("ActivateIncident failed: %v", err)
+	}
+	unpatchedRB := monitoring.NewRolloutBridge(monitoring.RolloutBridgeConfig{
+		Storefront: unpatchedSF,
+	})
+	if _, err := unpatchedRB.RolloutTreeFix(ctx, &bugbash.BugBashTreeExecution{
+		ExecutionID:        "tree-unpatched",
+		IncidentID:         storefront.IncidentStackedPromoNegativeSubtotal,
+		ImplicatedServices: []string{storefront.ServicePricing, storefront.ServiceShipping},
+	}); err == nil {
+		t.Fatalf("expected RolloutTreeFix to fail when git workspace is unpatched, got nil error")
+	}
 }
 
 func TestMonitoringKubernetesManifestsAndGrafanaDashboardContract(t *testing.T) {

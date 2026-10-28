@@ -51,12 +51,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY harnesses/config/opencode.json /root/.config/opencode/opencode.json
 COPY harnesses/config/pi-models.json /root/.pi/agent/models.json
+COPY services/ /tmp/prewarm/services/
 COPY bin/linux_amd64/ax-task-runner /usr/local/bin/ax-task-runner
 COPY harnesses/bin/antigravity /usr/local/bin/antigravity
 COPY harnesses/bin/opencode-harness /usr/local/bin/opencode-harness
 COPY harnesses/bin/pi-harness /usr/local/bin/pi-harness
 
-RUN chmod +x /usr/local/bin/ax-task-runner \
+RUN printf "module github.com/gke-demos/ax-bug-bash\n\ngo 1.23\n" > /tmp/prewarm/go.mod \
+    && (cd /tmp/prewarm && go test -c -o /tmp/prewarm/checkout.test ./services/checkout-service/... && go test -c -o /tmp/prewarm/shipping.test ./services/shipping-service/...) \
+    && (cd /tmp/prewarm/services/inventory-service && cargo test --no-run) \
+    && /opt/ax-venv/bin/python3 -m compileall /tmp/prewarm/services/pricing-service \
+    && node --check /tmp/prewarm/services/storefront-web/test_currency.mjs \
+    && rm -rf /tmp/prewarm \
+    && chmod +x /usr/local/bin/ax-task-runner \
              /usr/local/bin/antigravity \
              /usr/local/bin/opencode-harness \
              /usr/local/bin/pi-harness

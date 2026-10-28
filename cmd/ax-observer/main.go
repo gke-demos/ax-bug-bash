@@ -13,16 +13,17 @@ import (
 
 	"github.com/gke-demos/ax-bug-bash/internal/bugbash"
 	"github.com/gke-demos/ax-bug-bash/internal/gateway"
+	"github.com/gke-demos/ax-bug-bash/internal/httputil"
 	"github.com/gke-demos/ax-bug-bash/internal/monitoring"
 	"github.com/gke-demos/ax-bug-bash/internal/observer"
 	"github.com/gke-demos/ax-bug-bash/internal/storefront"
 )
 
 func main() {
-	observerAddr := flag.String("addr", envOr("LISTEN_ADDR", "127.0.0.1:3000"), "HTTP listen address for AX Observer (:3000)")
-	storefrontAddr := flag.String("storefront-addr", envOr("STOREFRONT_LISTEN_ADDR", "127.0.0.1:3001"), "HTTP listen address for Retail Storefront in all-in-one mode (:3001)")
-	monitoringAddr := flag.String("monitoring-addr", envOr("MONITORING_LISTEN_ADDR", "127.0.0.1:3002"), "HTTP listen address for Monitoring & Alertmanager surface in all-in-one mode (:3002)")
-	allInOne := flag.Bool("all-in-one", envOr("ALL_IN_ONE", "true") != "false" && os.Getenv("STOREFRONT_URL") == "", "Start Storefront (:3001), Monitoring (:3002), and AX Observer (:3000) in a single process")
+	observerAddr := flag.String("addr", httputil.EnvOr("LISTEN_ADDR", "127.0.0.1:3000"), "HTTP listen address for AX Observer (:3000)")
+	storefrontAddr := flag.String("storefront-addr", httputil.EnvOr("STOREFRONT_LISTEN_ADDR", "127.0.0.1:3001"), "HTTP listen address for Retail Storefront in all-in-one mode (:3001)")
+	monitoringAddr := flag.String("monitoring-addr", httputil.EnvOr("MONITORING_LISTEN_ADDR", "127.0.0.1:3002"), "HTTP listen address for Monitoring & Alertmanager surface in all-in-one mode (:3002)")
+	allInOne := flag.Bool("all-in-one", httputil.EnvOr("ALL_IN_ONE", "true") != "false" && os.Getenv("STOREFRONT_URL") == "", "Start Storefront (:3001), Monitoring (:3002), and AX Observer (:3000) in a single process")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -38,8 +39,8 @@ func main() {
 		sfURL   = strings.TrimSpace(os.Getenv("STOREFRONT_URL"))
 		gwURL   = strings.TrimSpace(os.Getenv("MODEL_GATEWAY_URL"))
 		axAddr  = strings.TrimSpace(os.Getenv("AX_SERVER_ADDR"))
-		sfPub   = envOr("STOREFRONT_PUBLIC_URL", "http://localhost:3001")
-		grafPub = envOr("GRAFANA_PUBLIC_URL", "http://localhost:3002/monitoring")
+		sfPub   = httputil.EnvOr("STOREFRONT_PUBLIC_URL", "http://localhost:3001")
+		grafPub = httputil.EnvOr("GRAFANA_PUBLIC_URL", "http://localhost:3002/monitoring")
 	)
 
 	gw = gateway.NewServer(gateway.DefaultConfig(), nil)
@@ -129,11 +130,4 @@ func main() {
 	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("AX Observer server error: %v", err)
 	}
-}
-
-func envOr(key, fallback string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
-	}
-	return fallback
 }

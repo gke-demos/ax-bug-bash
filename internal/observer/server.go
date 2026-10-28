@@ -10,13 +10,13 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gke-demos/ax-bug-bash/internal/bugbash"
 	"github.com/gke-demos/ax-bug-bash/internal/gateway"
+	"github.com/gke-demos/ax-bug-bash/internal/httputil"
 	"github.com/gke-demos/ax-bug-bash/internal/monitoring"
 	"github.com/gke-demos/ax-bug-bash/internal/storefront"
 	"github.com/google/ax/pkg/apis/v1alpha1"
@@ -96,6 +96,7 @@ type ObserverChildTaskView struct {
 	ActiveModel        string                 `json:"active_model"`
 	SourceProvenance   string                 `json:"source_provenance"`
 	TaskConfig         map[string]any         `json:"task_config"`
+	FailingRequest     map[string]any         `json:"failing_request,omitempty"`
 	RegressionTestName string                 `json:"regression_test_name"`
 	TDDSteps           []bugbash.TDDStepEvent `json:"tdd_steps"`
 	RegressionTestDiff string                 `json:"regression_test_diff"`
@@ -188,10 +189,10 @@ type Server struct {
 // NewServer initializes the AX Observer server and wires default in-memory components when omitted.
 func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 	if strings.TrimSpace(cfg.StorefrontPublicURL) == "" {
-		cfg.StorefrontPublicURL = envOr("STOREFRONT_PUBLIC_URL", "http://localhost:3001")
+		cfg.StorefrontPublicURL = httputil.EnvOr("STOREFRONT_PUBLIC_URL", "http://localhost:3001")
 	}
 	if strings.TrimSpace(cfg.GrafanaPublicURL) == "" {
-		cfg.GrafanaPublicURL = envOr("GRAFANA_PUBLIC_URL", "http://localhost:3002/monitoring")
+		cfg.GrafanaPublicURL = httputil.EnvOr("GRAFANA_PUBLIC_URL", "http://localhost:3002/monitoring")
 	}
 
 	client := cfg.HTTPClient
@@ -295,11 +296,13 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 	scr := cfg.Scraper
 	if scr == nil {
 		scr = monitoring.NewScraper(monitoring.ScraperConfig{
-			Storefront:     sf,
-			StorefrontURL:  cfg.StorefrontURL,
-			RolloutBridge:  rb,
-			ScrapeInterval: 5 * time.Second,
-			HTTPClient:     client,
+			Storefront:         sf,
+			StorefrontURL:      cfg.StorefrontURL,
+			AlertmanagerBridge: ab,
+			RolloutBridge:      rb,
+			ScrapeInterval:     5 * time.Second,
+			DisableAutoWebhook: true,
+			HTTPClient:         client,
 		})
 	}
 	s.scraper = scr
@@ -351,10 +354,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticSub))))
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+		httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 	})
 
 	mux.HandleFunc("/api/state", s.handleGetState)
@@ -369,7 +372,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/about", s.handleSPAIndex)
 	mux.HandleFunc("/", s.handleSPAIndex)
 
-	return withSecurityHeaders(mux)
+	return httputil.WithSecurityHeaders(mux)
 }
 
 func (s *Server) handleSPAIndex(w http.ResponseWriter, r *http.Request) {
@@ -399,7 +402,7 @@ func (s *Server) handleGetState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	snap := s.BuildStateSnapshot(r.Context())
-	writeJSON(w, http.StatusOK, snap)
+	httputil.WriteJSON(w, http.StatusOK, snap)
 }
 
 func (s *Server) handleAlertmanagerWebhook(w http.ResponseWriter, r *http.Request) {
@@ -409,17 +412,17 @@ func (s *Server) handleAlertmanagerWebhook(w http.ResponseWriter, r *http.Reques
 	}
 	var payload monitoring.AlertmanagerWebhookPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid Alertmanager v4 JSON payload"})
+		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid Alertmanager v4 JSON payload"})
 		return
 	}
 	if len(payload.Alerts) == 0 && payload.Status == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "alerts list cannot be empty"})
+		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "alerts list cannot be empty"})
 		return
 	}
 
 	resp, err := s.alertBridge.ProcessWebhook(r.Context(), payload)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		httputil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -434,7 +437,7 @@ func (s *Server) handleAlertmanagerWebhook(w http.ResponseWriter, r *http.Reques
 	s.sse.Broadcast("worker.updated", snap.WorkerPool)
 	s.sse.Broadcast("state.snapshot", snap)
 
-	writeJSON(w, http.StatusOK, resp)
+	httputil.WriteJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleTriggerIncident(w http.ResponseWriter, r *http.Request) {
@@ -444,7 +447,7 @@ func (s *Server) handleTriggerIncident(w http.ResponseWriter, r *http.Request) {
 	}
 	var req TriggerIncidentRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON request"})
+		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON request"})
 		return
 	}
 
@@ -453,7 +456,7 @@ func (s *Server) handleTriggerIncident(w http.ResponseWriter, r *http.Request) {
 		if s.storefront != nil {
 			sc, err := s.storefront.RandomizeIncident()
 			if err != nil {
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				httputil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 				return
 			}
 			incID = sc.ID
@@ -464,7 +467,7 @@ func (s *Server) handleTriggerIncident(w http.ResponseWriter, r *http.Request) {
 
 	sc, ok := storefront.GetScenario(incID)
 	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("unknown incident_id %q", incID)})
+		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("unknown incident_id %q", incID)})
 		return
 	}
 
@@ -535,7 +538,7 @@ func (s *Server) handleTriggerIncident(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := s.alertBridge.ProcessWebhook(r.Context(), webhookPayload)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		httputil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -560,7 +563,7 @@ func (s *Server) handleTriggerIncident(w http.ResponseWriter, r *http.Request) {
 	s.sse.Broadcast("worker.updated", snap.WorkerPool)
 	s.sse.Broadcast("state.snapshot", snap)
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"status":         "triggered",
 		"incident_id":    sc.ID,
 		"harness":        harnessMode,
@@ -593,7 +596,7 @@ func (s *Server) handleResetIncidents(w http.ResponseWriter, r *http.Request) {
 	}
 	snap := s.BuildStateSnapshot(r.Context())
 	s.sse.Broadcast("state.snapshot", snap)
-	writeJSON(w, http.StatusOK, map[string]any{
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"status": "reset",
 		"state":  snap,
 	})
@@ -788,6 +791,7 @@ func (s *Server) convertTreeExecution(
 			cPhase = cMeta.phase
 		}
 		cCfg := cMeta.config
+		failingReq := bugbash.CheckoutRequestToMap(sc.TriggerCart)
 		if cCfg == nil {
 			detail := sc.ServiceTraces[ch.Service]
 			cCfg = map[string]any{
@@ -805,7 +809,10 @@ func (s *Server) convertTreeExecution(
 				"error_message":        detail.ErrorMessage,
 				"stack_trace":          detail.StackTrace,
 				"regression_test_name": ch.RegressionTestName,
+				"failing_request":      failingReq,
 			}
+		} else if fr, ok := cCfg["failing_request"].(map[string]any); ok && len(fr) > 0 {
+			failingReq = fr
 		}
 
 		reclaimMs := int64(4)
@@ -838,6 +845,7 @@ func (s *Server) convertTreeExecution(
 			ActiveModel:        activeModel,
 			SourceProvenance:   prov,
 			TaskConfig:         cCfg,
+			FailingRequest:     failingReq,
 			RegressionTestName: ch.RegressionTestName,
 			TDDSteps:           append([]bugbash.TDDStepEvent(nil), ch.TDDSteps...),
 			RegressionTestDiff: ch.RegressionTestDiff,
@@ -953,7 +961,7 @@ func (s *Server) buildServiceHealthList(
 		c500 := metricsSnap.HTTP500ByService[svc]
 		out = append(out, PolyglotServiceHealth{
 			Service:      svc,
-			Language:     serviceLanguageLabel(svc),
+			Language:     storefront.ServiceLanguage(svc),
 			Status:       status,
 			Implicated:   isImp,
 			Healed:       isImp && healed,
@@ -1017,51 +1025,4 @@ func workerIDForIP(pool bugbash.WorkerPoolSummary, ip string) string {
 		}
 	}
 	return ""
-}
-
-func serviceLanguageLabel(service string) string {
-	switch service {
-	case storefront.ServiceStorefrontWeb:
-		return "Node.js / TypeScript"
-	case storefront.ServiceCheckout:
-		return "Go"
-	case storefront.ServiceShipping:
-		return "Go"
-	case storefront.ServicePricing:
-		return "Python / FastAPI"
-	case storefront.ServiceInventory:
-		return "Rust / Axum"
-	default:
-		return "Polyglot"
-	}
-}
-
-func withSecurityHeaders(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet, http.MethodPost, http.MethodHead, http.MethodOptions:
-		default:
-			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'")
-		next.ServeHTTP(w, r)
-	})
-}
-
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
-}
-
-func envOr(key, fallback string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
-	}
-	return fallback
 }
