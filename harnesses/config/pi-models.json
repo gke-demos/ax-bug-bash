@@ -1,0 +1,54 @@
+{
+  "defaultProvider": "agent-platform-gateway",
+  "defaultModel": "gemini-3.8-flash",
+  "fallbackCascade": [
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash"
+  ],
+  "providers": {
+    "agent-platform-gateway": {
+      "type": "openai-compatible",
+      "baseUrl": "http://model-gateway.ax-system.svc.cluster.local:8080/s/default-task/v1",
+      "apiKey": "ax-sandbox-token",
+      "headers": {
+        "X-AX-Harness": "pi"
+      },
+      "models": [
+        {
+          "id": "gemini-3.8-flash",
+          "name": "Gemini 3.8 Flash",
+          "contextWindow": 1048576,
+          "maxTokens": 8192
+        },
+        {
+          "id": "gemini-3.7-flash",
+          "name": "Gemini 3.7 Flash",
+          "contextWindow": 1048576,
+          "maxTokens": 8192
+        },
+        {
+          "id": "gemini-3.6-flash",
+          "name": "Gemini 3.6 Flash",
+          "contextWindow": 1048576,
+          "maxTokens": 8192
+        },
+        {
+          "id": "gemini-3.5-flash",
+          "name": "Gemini 3.5 Flash",
+          "contextWindow": 1048576,
+          "maxTokens": 8192
+        }
+      ]
+    },
+    "google": {
+      "type": "gemini",
+      "baseUrl": "http://model-gateway.ax-system.svc.cluster.local:8080/s/default-task",
+      "apiKey": "ax-sandbox-token",
+      "headers": {
+        "X-AX-Harness": "pi"
+      }
+    }
+  }
+}
