@@ -48,6 +48,10 @@ _Avoid_: Entrypoint script, wrapper container, sidecar proxy.
 Whether a Bug Bash Tree run dispatches tasks onto a live GKE `google/ax` and Agent Substrate v0.6.0 cluster (`LIVE_GKE`) or executes inside the hermetic local runtime (`SIMULATED`).
 _Avoid_: Mock mode, local flag, stub backend.
 
+**Source Provenance**:
+Whether a task's model output and code repair originated from a live Gemini Enterprise Agent Platform model invocation through a Coding Harness (`LIVE`) or from a deterministic scenario fallback (`FIXTURE`).
+_Avoid_: Mock flag, live mode, fallback status.
+
 **Architecture Topology Catalog**:
 The canonical, drift-tested inventory of the system's surfaces, microservices, Incident Scenarios, Coding Harnesses, and task-lifecycle transitions that drives the interactive `/about` visualizer.
 _Avoid_: Static README copy, hardcoded diagram labels.
