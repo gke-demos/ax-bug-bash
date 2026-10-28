@@ -43,3 +43,11 @@ _Avoid_: Chat portal, monolithic dashboard.
 **Custom Runner**:
 The in-sandbox Go executable embedding `github.com/google/ax/runner.Run` that supervises the agent process, extracts patches and test results via `OnCommandExit`, and auto-suspends the task to release Substrate worker resources.
 _Avoid_: Entrypoint script, wrapper container, sidecar proxy.
+
+**Execution Mode**:
+Whether a Bug Bash Tree run dispatches tasks onto a live GKE `google/ax` and Agent Substrate v0.6.0 cluster (`LIVE_GKE`) or executes inside the hermetic local runtime (`SIMULATED`).
+_Avoid_: Mock mode, local flag, stub backend.
+
+**Architecture Topology Catalog**:
+The canonical, drift-tested inventory of the system's surfaces, microservices, Incident Scenarios, Coding Harnesses, and task-lifecycle transitions that drives the interactive `/about` visualizer.
+_Avoid_: Static README copy, hardcoded diagram labels.
