@@ -1,0 +1,36 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "agent-platform-gateway/gemini-3.8-flash",
+  "small_model": "agent-platform-gateway/gemini-3.5-flash",
+  "provider": {
+    "agent-platform-gateway": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Gemini Enterprise Agent Platform Model Gateway",
+      "options": {
+        "baseURL": "http://model-gateway.ax-system.svc.cluster.local:8080/s/default-task/v1",
+        "apiKey": "ax-sandbox-token",
+        "headers": {
+          "X-AX-Harness": "opencode"
+        }
+      },
+      "models": {
+        "gemini-3.8-flash": {
+          "name": "Gemini 3.8 Flash (Primary)",
+          "tool_call": true
+        },
+        "gemini-3.7-flash": {
+          "name": "Gemini 3.7 Flash (Cascade Fallback 1)",
+          "tool_call": true
+        },
+        "gemini-3.6-flash": {
+          "name": "Gemini 3.6 Flash (Cascade Fallback 2)",
+          "tool_call": true
+        },
+        "gemini-3.5-flash": {
+          "name": "Gemini 3.5 Flash (Cascade Fallback 3)",
+          "tool_call": true
+        }
+      }
+    }
+  }
+}

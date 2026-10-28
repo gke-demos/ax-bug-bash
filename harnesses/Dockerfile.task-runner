@@ -1,0 +1,67 @@
+FROM python:3.12-slim
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HOME=/root \
+    WORKSPACE_DIR=/workspace \
+    GOCACHE=/var/cache/ax-build/gocache \
+    GOMODCACHE=/var/cache/ax-build/gomodcache \
+    CARGO_HOME=/var/cache/ax-build/cargo \
+    RUSTUP_HOME=/usr/local/rustup \
+    VIRTUAL_ENV=/opt/ax-venv \
+    NODE_PATH=/usr/local/lib/node_modules \
+    PATH="/opt/ax-venv/bin:/usr/local/go/bin:/var/cache/ax-build/cargo/bin:/usr/local/bin:${PATH}" \
+    GATEWAY_BASE_URL="http://model-gateway.ax-system.svc.cluster.local:8080" \
+    GEMINI_API_KEY="ax-sandbox-token" \
+    OPENAI_API_KEY="ax-sandbox-token" \
+    AGENT_MODEL="gemini-3.8-flash" \
+    TERM=xterm-256color
+
+# Install system dependencies, Node.js 22, Go toolchain, and Rust (cargo/rustc)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      bash \
+      build-essential \
+      ca-certificates \
+      curl \
+      git \
+      gnupg \
+      jq \
+      openssh-client \
+      pkg-config \
+      procps \
+      ripgrep \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && curl -fsSL https://go.dev/dl/go1.23.6.linux-amd64.tar.gz | tar -C /usr/local -xz \
+    && curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal \
+    && npm install -g opencode-ai @mariozechner/pi-coding-agent \
+    && npm cache clean --force \
+    && python3 -m venv /opt/ax-venv \
+    && /opt/ax-venv/bin/pip install --no-cache-dir google-antigravity pytest fastapi httpx pydantic \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /workspace /workspace/.ax-state \
+                /var/cache/ax-build/gocache /var/cache/ax-build/gomodcache /var/cache/ax-build/cargo \
+                /root/.config/opencode /root/.pi/agent \
+    && chmod 1777 /tmp \
+    && git config --system user.name "AX Bug Bash Agent" \
+    && git config --system user.email "agent@ax-bug-bash.local" \
+    && git config --system init.defaultBranch main \
+    && git config --system safe.directory "*"
+
+COPY harnesses/config/opencode.json /root/.config/opencode/opencode.json
+COPY harnesses/config/pi-models.json /root/.pi/agent/models.json
+COPY bin/linux_amd64/ax-task-runner /usr/local/bin/ax-task-runner
+COPY harnesses/bin/antigravity /usr/local/bin/antigravity
+COPY harnesses/bin/opencode-harness /usr/local/bin/opencode-harness
+COPY harnesses/bin/pi-harness /usr/local/bin/pi-harness
+
+RUN chmod +x /usr/local/bin/ax-task-runner \
+             /usr/local/bin/antigravity \
+             /usr/local/bin/opencode-harness \
+             /usr/local/bin/pi-harness
+
+WORKDIR /workspace
+EXPOSE 80
+
+ENTRYPOINT ["/usr/local/bin/ax-task-runner"]

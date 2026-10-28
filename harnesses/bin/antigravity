@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""Antigravity CLI coding harness backed by Gemini Enterprise Agent Platform via zero-secret model-gateway."""
+
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+
+WORKSPACE = os.environ.get("WORKSPACE_DIR", "/workspace")
+TASK_NAME = os.environ.get("AX_TASK_NAME", os.environ.get("SESSION_ID", "default-task"))
+GATEWAY_BASE = os.environ.get("GATEWAY_BASE_URL", "http://model-gateway.ax-system.svc.cluster.local:8080").rstrip("/")
+BASE_URL = os.environ.get("GOOGLE_GEMINI_BASE_URL", f"{GATEWAY_BASE}/s/{TASK_NAME}").rstrip("/")
+MODEL = os.environ.get("AGENT_MODEL", "gemini-3.8-flash")
+SANDBOX_TOKEN = os.environ.get("GEMINI_API_KEY", "ax-sandbox-token")
+
+SYSTEM_PROMPT = (
+    "You are Antigravity, an autonomous coding agent running inside a google/ax + Agent Substrate v0.6.0 sandbox in /workspace. "
+    "Follow strict Red-Green TDD: first write a failing Regression Test reproducing the production 500 error, "
+    "then patch the microservice until all tests pass. "
+    "You can use tools (`read_file`, `write_file`, `list_files`, `run_command`) or emit "
+    "`<file path=\"relative/path\">...content...</file>` and `<bash>command</bash>` blocks."
+)
+
+TOOLS = [
+    {
+        "functionDeclarations": [
+            {
+                "name": "read_file",
+                "description": "Read the contents of a file relative to /workspace.",
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {"path": {"type": "STRING"}},
+                    "required": ["path"],
+                },
+            },
+            {
+                "name": "write_file",
+                "description": "Write content to a file relative to /workspace.",
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "path": {"type": "STRING"},
+                        "content": {"type": "STRING"},
+                    },
+                    "required": ["path", "content"],
+                },
+            },
+            {
+                "name": "list_files",
+                "description": "List files in /workspace.",
+                "parameters": {"type": "OBJECT", "properties": {}},
+            },
+            {
+                "name": "run_command",
+                "description": "Execute a shell command inside /workspace.",
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {"command": {"type": "STRING"}},
+                    "required": ["command"],
+                },
+            },
+        ]
+    }
+]
+
+
+def safe_path(rel_path: str) -> str:
+    cleaned = rel_path.strip().lstrip("/")
+    target = os.path.abspath(os.path.join(WORKSPACE, cleaned))
+    root = os.path.abspath(WORKSPACE)
+    if not (target == root or target.startswith(root + os.sep)):
+        raise ValueError(f"Path escapes workspace: {rel_path}")
+    return target
+
+
+def exec_tool(name: str, args: dict) -> tuple[str, str]:
+    try:
+        if name == "read_file":
+            p = safe_path(args.get("path", ""))
+            with open(p, "r", encoding="utf-8", errors="replace") as fh:
+                return fh.read(), f"  • Read {args.get('path')}"
+        if name == "write_file":
+            p = safe_path(args.get("path", ""))
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write(args.get("content", ""))
+            return f"Wrote {args.get('path')}", f"  ✓ Wrote {args.get('path')}"
+        if name == "list_files":
+            items = []
+            for root, dirs, files in os.walk(WORKSPACE):
+                dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", "node_modules", ".venv", "target")]
+                for f in sorted(files):
+                    items.append(os.path.relpath(os.path.join(root, f), WORKSPACE))
+            return "\n".join(items), f"  • Listed {len(items)} files"
+        if name == "run_command":
+            cmd = args.get("command", "")
+            proc = subprocess.run(cmd, shell=True, cwd=WORKSPACE, text=True, capture_output=True, timeout=60)
+            out = (proc.stdout + proc.stderr).strip()
+            return f"exit={proc.returncode}\n{out}", f"  $ {cmd} (exit {proc.returncode})"
+    except Exception as exc:
+        return f"error: {exc}", f"  ✗ {name}: {exc}"
+    return f"unknown tool: {name}", ""
+
+
+def apply_inline_blocks(reply: str) -> list[str]:
+    logs = []
+    for match in re.finditer(r'<file\s+path="([^"]+)">\n?(.*?)</file>', reply, re.DOTALL):
+        rel_path, content = match.group(1), match.group(2)
+        _, msg = exec_tool("write_file", {"path": rel_path, "content": content})
+        if msg:
+            logs.append(msg)
+    for match in re.finditer(r"<bash>\n?(.*?)</bash>", reply, re.DOTALL):
+        cmd = match.group(1).strip()
+        if cmd:
+            res, msg = exec_tool("run_command", {"command": cmd})
+            logs.append(f"{msg}\n{res}")
+    return logs
+
+
+def run_turn(contents: list[dict]) -> str:
+    url = f"{BASE_URL}/v1beta/models/{MODEL}:generateContent"
+    for _ in range(6):
+        payload = {
+            "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+            "contents": contents,
+            "tools": TOOLS,
+        }
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": SANDBOX_TOKEN,
+                "X-AX-Harness": "antigravity",
+                "X-AX-Task-Name": TASK_NAME,
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:
+            return f"[antigravity-local-fallback task={TASK_NAME} model={MODEL}] {exc}"
+
+        candidates = data.get("candidates", [])
+        if not candidates:
+            return "(empty response)"
+        content = candidates[0].get("content", {})
+        parts = content.get("parts", [])
+        contents.append({"role": "model", "parts": parts})
+
+        fn_calls = [p["functionCall"] for p in parts if "functionCall" in p]
+        if not fn_calls:
+            text = "\n".join(p.get("text", "") for p in parts if "text" in p).strip()
+            for line in apply_inline_blocks(text):
+                print(line)
+            return text
+
+        fn_responses = []
+        for fc in fn_calls:
+            name = fc.get("name", "")
+            args = fc.get("args", {}) or {}
+            result, log_line = exec_tool(name, args)
+            if log_line:
+                print(log_line)
+            fn_responses.append(
+                {
+                    "functionResponse": {
+                        "name": name,
+                        "response": {"result": result},
+                    }
+                }
+            )
+        contents.append({"role": "user", "parts": fn_responses})
+    return "(max tool iterations reached)"
+
+
+def main() -> int:
+    os.makedirs(WORKSPACE, exist_ok=True)
+    os.chdir(WORKSPACE)
+
+    args = [a for a in sys.argv[1:] if a not in ("-p", "--print", "run")]
+    prompt = " ".join(args).strip() or f"Execute TDD repair for {TASK_NAME}"
+    contents = [{"role": "user", "parts": [{"text": prompt}]}]
+    print(run_turn(contents))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
