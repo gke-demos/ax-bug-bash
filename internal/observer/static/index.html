@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AX Bug Bash Observer — Recursive Sub-Task Fan-Out on google/ax &amp; Agent Substrate v0.6.0</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-left">
+      <a href="/" class="brand-link" data-nav="/">
+        <span class="brand-icon" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="18" cy="18" r="3"></circle>
+            <circle cx="6" cy="6" r="3"></circle>
+            <circle cx="6" cy="18" r="3"></circle>
+            <path d="M6 9v6"></path>
+            <path d="M8.6 7.5l6.8 9"></path>
+          </svg>
+        </span>
+        <span class="brand-title">AX Bug Bash Observer</span>
+      </a>
+      <span class="pill pill-accent">google/ax</span>
+      <span class="pill pill-substrate">Agent Substrate v0.6.0</span>
+
+      <nav class="primary-nav" aria-label="Primary Navigation">
+        <a href="/" class="nav-link active" data-route="/">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>
+          <span>Bug Bash Tree</span>
+        </a>
+        <a href="/workers" class="nav-link" data-route="/workers">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
+          <span>Substrate Workers</span>
+        </a>
+        <a href="/about" class="nav-link" data-route="/about">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+          <span>How It Works</span>
+        </a>
+      </nav>
+    </div>
+
+    <div class="topbar-right">
+      <a id="link-storefront" href="http://localhost:3001" target="_blank" rel="noopener noreferrer" class="surface-link">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"></circle><circle cx="20" cy="21" r="1"></circle><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"></path></svg>
+        <span>Retail Storefront (:3001)</span>
+      </a>
+      <a id="link-grafana" href="http://localhost:3002/monitoring" target="_blank" rel="noopener noreferrer" class="surface-link">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+        <span>Grafana / Monitoring (:3002)</span>
+      </a>
+
+      <div class="gateway-badges" title="Zero-Secret Agent Platform Model Gateway">
+        <span id="badge-provenance" class="pill pill-provenance">FIXTURE</span>
+        <span id="badge-active-model" class="pill pill-model">gemini-3.8-flash</span>
+      </div>
+
+      <button type="button" id="btn-cmd-k" class="btn-cmd-k" aria-haspopup="dialog" aria-controls="cmd-k-modal">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+        <span>Trigger Scenario</span>
+        <kbd class="kbd-shortcut">⌘K</kbd>
+      </button>
+
+      <div id="btn-theme-toggle" class="theme-segmented" role="group" aria-label="Projector Light Mode Toggle">
+        <button type="button" id="btn-theme-dark" class="theme-segment active" aria-label="Dark Mode" title="Dark Mode">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+        </button>
+        <button type="button" id="btn-theme-light" class="theme-segment" aria-label="Projector Light Mode" title="Projector Light Mode">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ROUTE 1: / (3-Column Bug Bash Tree & Incident War Room) -->
+  <main id="view-tree" class="route-view active" data-view="/">
+    <div class="war-room-grid">
+      <!-- Left Column: Alertmanager Webhook, Loki Stack Traces & 5-Service Blast Radius -->
+      <section class="panel col-left" aria-label="Incoming Alertmanager Webhook and 5-Service Blast Radius">
+        <div class="panel-header">
+          <div class="panel-title-wrap">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+            <h2>Alertmanager &amp; 5-Service Blast Radius</h2>
+          </div>
+          <span id="alert-eval-badge" class="pill pill-subtle">5s (for: 0s)</span>
+        </div>
+
+        <div id="alert-webhook-card" class="subcard">
+          <div class="subcard-label">Incoming Alertmanager v4 Webhook</div>
+          <div id="alert-webhook-content" class="empty-hint">
+            No firing Alertmanager alerts yet. Press ⌘K to trigger an Incident Scenario on the 5-service Retail Storefront.
+          </div>
+        </div>
+
+        <div id="loki-trace-card" class="subcard">
+          <div class="subcard-label">Loki &amp; Cloud Logging Structured HTTP 500 Stack Trace</div>
+          <pre id="loki-trace-pre" class="code-block trace-block">Awaiting StorefrontHTTP500Spike telemetry...</pre>
+        </div>
+
+        <div class="subcard">
+          <div class="subcard-label">5-Service Polyglot Storefront Blast Radius (Selective Triage)</div>
+          <div id="service-blast-grid" class="service-blast-list"></div>
+        </div>
+      </section>
+
+      <!-- Center Column: Interactive Recursive Bug Bash Tree SVG & TDD Progress -->
+      <section class="panel col-center" aria-label="Recursive AX Bug Bash Tree">
+        <div class="panel-header">
+          <div class="panel-title-wrap">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M6 9v6"></path><path d="M8.6 7.5l6.8 9"></path></svg>
+            <h2>Recursive AX Bug Bash Tree</h2>
+          </div>
+          <div class="header-actions">
+            <span id="tree-phase-badge" class="pill pill-status">IDLE</span>
+            <button type="button" id="btn-toggle-config" class="btn-ghost">Task.spec.config JSON</button>
+          </div>
+        </div>
+
+        <div id="tree-summary-banner" class="tree-banner">
+          <div class="tree-banner-title" id="tree-incident-title">Self-Spawning Bug Bash Tree Ready</div>
+          <div class="tree-banner-sub" id="tree-incident-summary">
+            Root Task (triage-&lt;id&gt;) inspects production stack traces and spawns isolated Child Tasks (fixer-&lt;service&gt;) via ax.v1alpha1.AX gRPC CreateTask + ResumeTask only for the 2–3 implicated microservices.
+          </div>
+        </div>
+
+        <div class="svg-tree-container">
+          <svg id="bugbash-tree-svg" viewBox="0 0 760 360" role="img" aria-label="Interactive AX Bug Bash Task Tree"></svg>
+        </div>
+
+        <div id="tdd-stepper" class="tdd-stepper">
+          <div class="tdd-step" data-step="REPRODUCE_RED">
+            <span class="step-index">1</span>
+            <div class="step-body">
+              <div class="step-name">1. Reproduce Red</div>
+              <div class="step-desc">Author failing Regression Test</div>
+            </div>
+          </div>
+          <div class="tdd-step" data-step="PATCH_GREEN">
+            <span class="step-index">2</span>
+            <div class="step-body">
+              <div class="step-name">2. Patch Green</div>
+              <div class="step-desc">Fix service until suite passes</div>
+            </div>
+          </div>
+          <div class="tdd-step" data-step="EXTRACT_DIFF">
+            <span class="step-index">3</span>
+            <div class="step-body">
+              <div class="step-name">3. Extract Diff</div>
+              <div class="step-desc">OnCommandExit git diff + .ax-state</div>
+            </div>
+          </div>
+          <div class="tdd-step" data-step="AUTO_SUSPEND">
+            <span class="step-index">4</span>
+            <div class="step-body">
+              <div class="step-name">4. SuspendTask</div>
+              <div class="step-desc">Reclaim ateworker-gvisor slot</div>
+            </div>
+          </div>
+        </div>
+
+        <div id="task-config-drawer" class="config-drawer hidden">
+          <div class="subcard-label">Selected AX Task.spec.config (google.protobuf.Struct)</div>
+          <pre id="task-config-json" class="code-block">{}</pre>
+        </div>
+      </section>
+
+      <!-- Right Column: Regression Test & Git Patch Inspector + Live Rollout -->
+      <section class="panel col-right" aria-label="Regression Test, Git Patch Inspector, and Live Rollout">
+        <div class="panel-header">
+          <div class="panel-title-wrap">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
+            <h2>Regression Test &amp; Patch Inspector</h2>
+          </div>
+          <span id="selected-child-slot-badge" class="pill pill-subtle">Slot Reclaimed: --</span>
+        </div>
+
+        <div id="child-service-tabs" class="service-tabs" role="tablist"></div>
+
+        <div id="selected-child-meta" class="child-meta-bar">
+          Select a spawned Child Task node or service tab to inspect its newly authored Regression Test, code fix diff, and test runner output.
+        </div>
+
+        <div class="inspector-scroll">
+          <div class="subcard">
+            <div class="subcard-label">Newly Authored Regression Test Diff (Red Phase Reproduction)</div>
+            <pre id="regression-test-diff" class="code-block diff-block">No regression test diff captured yet.</pre>
+          </div>
+
+          <div class="subcard">
+            <div class="subcard-label">Production Microservice Code Fix Diff (Green Phase Remediation)</div>
+            <pre id="code-fix-diff" class="code-block diff-block">No production code fix diff captured yet.</pre>
+          </div>
+
+          <div class="subcard">
+            <div class="subcard-label">Polyglot Test Runner Output (Red Failure -&gt; Green Verification)</div>
+            <pre id="test-runner-output" class="code-block">No test runner output yet.</pre>
+          </div>
+
+          <div id="rollout-status-card" class="subcard rollout-card">
+            <div class="subcard-label">Pre-Warmed Incremental Git Rollout (&lt; 10s SLA) &amp; Storefront HTTP 200 Verification</div>
+            <div id="rollout-status-content" class="empty-hint">
+              Awaiting Root Task patch merge and push to in-cluster Storefront Git server.
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <!-- ROUTE 2: /workers (Agent Substrate v0.6.0 WorkerPool & Slot Reclamation) -->
+  <main id="view-workers" class="route-view" data-view="/workers">
+    <div class="workers-container">
+      <div class="workers-kpi-bar">
+        <div class="kpi-card">
+          <span class="kpi-label">Agent Substrate Pool</span>
+          <strong id="kpi-substrate-version" class="kpi-value">v0.6.0 (gVisor)</strong>
+        </div>
+        <div class="kpi-card">
+          <span class="kpi-label">Snapshot Fidelity</span>
+          <strong class="kpi-value">SNAPSHOT_FIDELITY_VOLUMES</strong>
+        </div>
+        <div class="kpi-card">
+          <span class="kpi-label">Active / Suspended Tasks</span>
+          <strong id="kpi-task-counts" class="kpi-value">0 Active / 0 Suspended</strong>
+        </div>
+        <div class="kpi-card">
+          <span class="kpi-label">Reclaimed Worker Slots</span>
+          <strong id="kpi-reclaimed-slots" class="kpi-value">0 Reclaimed</strong>
+        </div>
+        <div class="kpi-card">
+          <span class="kpi-label">Cluster CPU / Memory Reservations</span>
+          <strong id="kpi-resource-usage" class="kpi-value">0m / 16000m CPU · 0MB / 32768MB</strong>
+        </div>
+      </div>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div class="panel-title-wrap">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
+            <h2>Agent Substrate v0.6.0 Warm WorkerPool (ateworker-gvisor-01..04)</h2>
+          </div>
+          <span class="pill pill-substrate">ResourceRequirements: 1000m CPU / 2048Mi per Task</span>
+        </div>
+        <div id="workers-grid" class="workers-grid"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div class="panel-title-wrap">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+            <h2>Cloud Storage Volume Snapshot Shelf (/workspace/.ax-state · ADR-0006)</h2>
+          </div>
+          <span class="pill pill-subtle">Instant SuspendTask Slot Reclamation</span>
+        </div>
+        <div id="snapshot-shelf" class="snapshot-shelf"></div>
+      </section>
+    </div>
+  </main>
+
+  <!-- ROUTE 3: /about (Interactive Architecture & How It Works) -->
+  <main id="view-about" class="route-view" data-view="/about">
+    <div class="about-container">
+      <section class="panel">
+        <div class="panel-header">
+          <div class="panel-title-wrap">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+            <h2>1. Three Decoupled Production Surfaces &amp; Recursive Bug Bash Tree Topology (ADR-0001..ADR-0005)</h2>
+          </div>
+          <span class="pill pill-accent">Interactive Architecture Topology</span>
+        </div>
+        <div class="about-svg-wrap">
+          <svg viewBox="0 0 980 250" class="arch-svg" role="img" aria-label="Three Decoupled Production Surfaces Topology">
+            <defs>
+              <linearGradient id="grad-flow" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" stop-color="#38bdf8" />
+                <stop offset="50%" stop-color="#818cf8" />
+                <stop offset="100%" stop-color="#10b981" />
+              </linearGradient>
+            </defs>
+            <!-- Surface 1: Retail Storefront -->
+            <rect x="20" y="30" width="260" height="190" rx="12" class="arch-box" />
+            <text x="40" y="60" class="arch-title">1. Retail Storefront (:3001)</text>
+            <text x="40" y="84" class="arch-sub">5 Polyglot Microservices + Git Server</text>
+            <text x="40" y="112" class="arch-item">• storefront-web (Node.js / TS)</text>
+            <text x="40" y="132" class="arch-item">• checkout-service (Go)</text>
+            <text x="40" y="152" class="arch-item">• shipping-service (Go)</text>
+            <text x="40" y="172" class="arch-item">• pricing-service (Python / FastAPI)</text>
+            <text x="40" y="192" class="arch-item">• inventory-service (Rust / Axum)</text>
+
+            <!-- Arrow 1 -> 2 -->
+            <path d="M 280 105 L 355 105" class="arch-edge-animated" />
+            <text x="292" y="94" class="arch-edge-label">5s Scrape</text>
+
+            <!-- Surface 2: Monitoring Stack -->
+            <rect x="360" y="30" width="260" height="190" rx="12" class="arch-box" />
+            <text x="380" y="60" class="arch-title">2. Monitoring Stack (:3002)</text>
+            <text x="380" y="84" class="arch-sub">Prometheus + Alertmanager + Loki</text>
+            <text x="380" y="112" class="arch-item">• StorefrontHTTP500Spike (for: 0s)</text>
+            <text x="380" y="134" class="arch-item">• Loki Structured 500 Stack Traces</text>
+            <text x="380" y="156" class="arch-item">• Grafana Golden Signals Dashboard</text>
+            <text x="380" y="178" class="arch-item">• GCP Managed Prometheus + Logging</text>
+
+            <!-- Arrow 2 -> 3 -->
+            <path d="M 620 105 L 695 105" class="arch-edge-animated" />
+            <text x="630" y="94" class="arch-edge-label">v4 Webhook</text>
+
+            <!-- Surface 3: AX Observer & google/ax -->
+            <rect x="700" y="30" width="260" height="190" rx="12" class="arch-box" />
+            <text x="720" y="60" class="arch-title">3. AX Observer &amp; google/ax (:3000)</text>
+            <text x="720" y="84" class="arch-sub">Recursive Sub-Task Fan-Out</text>
+            <text x="720" y="112" class="arch-item">• Root Task (triage-&lt;id&gt;) Stack Analysis</text>
+            <text x="720" y="134" class="arch-item">• Child Tasks (fixer-&lt;svc&gt;) Red-Green TDD</text>
+            <text x="720" y="156" class="arch-item">• Custom Runner OnCommandExit + Suspend</text>
+            <text x="720" y="178" class="arch-item">• &lt; 10s Pre-Warmed Git Rollout Heals :3001</text>
+          </svg>
+        </div>
+      </section>
+
+      <div class="about-grid-2">
+        <section class="panel">
+          <div class="panel-header">
+            <div class="panel-title-wrap">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+              <h2>2. Zero-Secret Model Gateway &amp; Multi-Harness Sandbox (ADR-0007)</h2>
+            </div>
+          </div>
+          <div class="about-svg-wrap">
+            <svg viewBox="0 0 460 220" class="arch-svg" role="img" aria-label="Multi-Harness Zero-Secret Model Gateway">
+              <rect x="14" y="20" width="135" height="52" rx="8" class="arch-box" />
+              <text x="26" y="44" class="arch-title">antigravity</text>
+              <text x="26" y="62" class="arch-sub">Gemini v1beta REST</text>
+
+              <rect x="14" y="84" width="135" height="52" rx="8" class="arch-box" />
+              <text x="26" y="108" class="arch-title">opencode</text>
+              <text x="26" y="126" class="arch-sub">/v1/chat/completions</text>
+
+              <rect x="14" y="148" width="135" height="52" rx="8" class="arch-box" />
+              <text x="26" y="172" class="arch-title">pi coding agent</text>
+              <text x="26" y="190" class="arch-sub">/v1/chat/completions</text>
+
+              <path d="M 150 46 L 195 110" class="arch-edge-animated" />
+              <path d="M 150 110 L 195 110" class="arch-edge-animated" />
+              <path d="M 150 174 L 195 110" class="arch-edge-animated" />
+
+              <rect x="198" y="28" width="248" height="165" rx="10" class="arch-box" />
+              <text x="212" y="54" class="arch-title">Agent Platform Model Gateway</text>
+              <text x="212" y="74" class="arch-sub">GKE Workload Identity (Zero Sandbox Keys)</text>
+              <text x="212" y="102" class="arch-item">1. gemini-3.8-flash (Primary)</text>
+              <text x="212" y="122" class="arch-item">2. gemini-3.7-flash (Fallback 1)</text>
+              <text x="212" y="142" class="arch-item">3. gemini-3.6-flash (Fallback 2)</text>
+              <text x="212" y="162" class="arch-item">4. gemini-3.5-flash + FIXTURE</text>
+            </svg>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <div class="panel-title-wrap">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+              <h2>3. Custom Runner OnCommandExit &amp; SuspendTask Lifecycle (ADR-0004 &amp; ADR-0006)</h2>
+            </div>
+          </div>
+          <div class="about-svg-wrap">
+            <svg viewBox="0 0 460 220" class="arch-svg" role="img" aria-label="Custom Runner OnCommandExit and SuspendTask State Machine">
+              <rect x="16" y="25" width="195" height="72" rx="8" class="arch-box" />
+              <text x="28" y="50" class="arch-title">1. Reproduce Red (TDD)</text>
+              <text x="28" y="70" class="arch-sub">Write failing Regression Test</text>
+
+              <path d="M 212 61 L 248 61" class="arch-edge-animated" />
+
+              <rect x="250" y="25" width="195" height="72" rx="8" class="arch-box" />
+              <text x="262" y="50" class="arch-title">2. Patch Green (TDD)</text>
+              <text x="262" y="70" class="arch-sub">Fix service; all tests pass</text>
+
+              <path d="M 347 98 L 347 125" class="arch-edge-animated" />
+
+              <rect x="250" y="128" width="195" height="72" rx="8" class="arch-box" />
+              <text x="262" y="153" class="arch-title">3. runner.Run OnCommandExit</text>
+              <text x="262" y="173" class="arch-sub">Save /workspace/.ax-state</text>
+
+              <path d="M 248 164 L 212 164" class="arch-edge-animated" />
+
+              <rect x="16" y="128" width="195" height="72" rx="8" class="arch-box" />
+              <text x="28" y="153" class="arch-title">4. gRPC SuspendTask</text>
+              <text x="28" y="173" class="arch-sub">Reclaim ateworker-gvisor slot</text>
+            </svg>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <!-- DISCRETE ⌘K INCIDENT SCENARIO & CODING HARNESS MODAL -->
+  <div id="cmd-k-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="cmd-k-title">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <div class="panel-title-wrap">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+          <h2 id="cmd-k-title">Trigger Incident Scenario &amp; Select Coding Harness</h2>
+        </div>
+        <button type="button" id="btn-close-modal" class="btn-icon" aria-label="Close Modal">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+
+      <div class="modal-body">
+        <div class="modal-section">
+          <div class="subcard-label">1. Select Coding Harness Mode (Task.spec.config)</div>
+          <div id="harness-selector" class="harness-grid">
+            <button type="button" class="harness-option active" data-harness="multi">
+              <strong>Multi-Harness Parallel Mode</strong>
+              <span>Assigns antigravity, opencode &amp; pi across sibling Child Tasks</span>
+            </button>
+            <button type="button" class="harness-option" data-harness="antigravity">
+              <strong>antigravity</strong>
+              <span>Google Antigravity CLI (Gemini v1beta REST)</span>
+            </button>
+            <button type="button" class="harness-option" data-harness="opencode">
+              <strong>opencode</strong>
+              <span>OpenCode AI CLI (OpenAI /v1/chat/completions)</span>
+            </button>
+            <button type="button" class="harness-option" data-harness="pi">
+              <strong>pi</strong>
+              <span>Pi Coding Agent CLI (@mariozechner/pi-coding-agent)</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="modal-section">
+          <div class="subcard-label">2. Launch Production Incident Scenario on Retail Storefront (:3001)</div>
+          <div class="scenario-grid">
+            <button type="button" class="scenario-card" data-incident="INC-101">
+              <div class="scenario-top">
+                <span class="pill pill-alert">INC-101</span>
+                <span class="scenario-svcs">pricing-service (Python) + shipping-service (Go)</span>
+              </div>
+              <strong>Stacked Promo Negative Subtotal Crash</strong>
+              <p>SAVE20 + FLAT15 on $16.00 USB-C cable yields -220¢ subtotal &amp; 0¢ carrier tariff bounds crash.</p>
+            </button>
+
+            <button type="button" class="scenario-card" data-incident="INC-102">
+              <div class="scenario-top">
+                <span class="pill pill-alert">INC-102</span>
+                <span class="scenario-svcs">inventory-service (Rust) + checkout-service (Go)</span>
+              </div>
+              <strong>Flash-Sale Bundle u32 Stock Underflow</strong>
+              <p>2-for-1 Mechanical Keyboard bundle when 2 units remain causes Rust u32 underflow panic.</p>
+            </button>
+
+            <button type="button" class="scenario-card" data-incident="INC-103">
+              <div class="scenario-top">
+                <span class="pill pill-alert">INC-103</span>
+                <span class="scenario-svcs">storefront-web (TS) + pricing-service (Py) + checkout-service (Go)</span>
+              </div>
+              <strong>Zero-Decimal JPY Currency Rounding Mismatch</strong>
+              <p>Converting $29.00 Desk Mat to JPY produces fractional minor unit 4476.15 across 3 services.</p>
+            </button>
+
+            <button type="button" class="scenario-card" data-incident="INC-104">
+              <div class="scenario-top">
+                <span class="pill pill-alert">INC-104</span>
+                <span class="scenario-svcs">inventory-service (Rust) + shipping-service (Go)</span>
+              </div>
+              <strong>Lithium Hazmat Weight Tier Overflow</strong>
+              <p>3,400g Portable Power Station (UN3480-LITHIUM) overflows 1,000g ORM-D air tier.</p>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button type="button" id="btn-trigger-random" class="btn-primary" data-incident="RANDOM">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"></polyline><line x1="4" y1="20" x2="21" y2="3"></line><polyline points="21 16 21 21 16 21"></polyline><line x1="15" y1="15" x2="21" y2="21"></line><line x1="4" y1="4" x2="9" y2="9"></line></svg>
+          <span>Randomize Incident Scenario</span>
+        </button>
+        <button type="button" id="btn-reset-incidents" class="btn-secondary">
+          <span>Reset / Heal Storefront</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

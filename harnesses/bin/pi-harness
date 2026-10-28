@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+"""Pi (@mariozechner/pi-coding-agent) CLI coding harness talking to Model Gateway (/s/{task_name})."""
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import urllib.request
+
+WORKSPACE = os.environ.get("WORKSPACE_DIR", "/workspace")
+TASK_NAME = os.environ.get("AX_TASK_NAME", os.environ.get("SESSION_ID", "default-task"))
+GATEWAY_BASE = os.environ.get("GATEWAY_BASE_URL", "http://model-gateway.ax-system.svc.cluster.local:8080").rstrip("/")
+OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", f"{GATEWAY_BASE}/s/{TASK_NAME}/v1").rstrip("/")
+MODEL = os.environ.get("AGENT_MODEL", "gemini-3.8-flash")
+SANDBOX_TOKEN = os.environ.get("GEMINI_API_KEY", "ax-sandbox-token")
+
+SYSTEM_PROMPT = (
+    "You are Pi (@mariozechner/pi-coding-agent), an autonomous coding agent running inside a google/ax + Agent Substrate v0.6.0 sandbox in /workspace. "
+    "Follow strict Red-Green TDD: first write a failing Regression Test reproducing the production 500 error, "
+    "then patch the microservice until all tests pass."
+)
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read a file in /workspace",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "Write a file in /workspace",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "content": {"type": "string"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_command",
+            "description": "Run a shell command in /workspace",
+            "parameters": {
+                "type": "object",
+                "properties": {"command": {"type": "string"}},
+                "required": ["command"],
+            },
+        },
+    },
+]
+
+
+def safe_path(rel_path: str) -> str:
+    cleaned = rel_path.strip().lstrip("/")
+    target = os.path.abspath(os.path.join(WORKSPACE, cleaned))
+    root = os.path.abspath(WORKSPACE)
+    if not (target == root or target.startswith(root + os.sep)):
+        raise ValueError(f"Path escapes workspace: {rel_path}")
+    return target
+
+
+def exec_tool(name: str, args: dict) -> str:
+    try:
+        if name == "read_file":
+            p = safe_path(args.get("path", ""))
+            with open(p, "r", encoding="utf-8", errors="replace") as fh:
+                return fh.read()
+        if name == "write_file":
+            p = safe_path(args.get("path", ""))
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write(args.get("content", ""))
+            return f"Wrote {args.get('path')}"
+        if name == "run_command":
+            cmd = args.get("command", "")
+            proc = subprocess.run(cmd, shell=True, cwd=WORKSPACE, text=True, capture_output=True, timeout=60)
+            return f"exit={proc.returncode}\n{(proc.stdout + proc.stderr).strip()}"
+    except Exception as exc:
+        return f"error: {exc}"
+    return f"unknown tool: {name}"
+
+
+def apply_inline_blocks(reply: str) -> None:
+    for match in re.finditer(r'<file\s+path="([^"]+)">\n?(.*?)</file>', reply, re.DOTALL):
+        exec_tool("write_file", {"path": match.group(1), "content": match.group(2)})
+    for match in re.finditer(r"<bash>\n?(.*?)</bash>", reply, re.DOTALL):
+        cmd = match.group(1).strip()
+        if cmd:
+            exec_tool("run_command", {"command": cmd})
+
+
+def run_pi_turn(prompt: str) -> str:
+    if os.environ.get("USE_NATIVE_PI_CLI") == "1" and shutil.which("pi"):
+        env = dict(os.environ)
+        env["OPENAI_BASE_URL"] = OPENAI_BASE_URL
+        env["OPENAI_API_KEY"] = SANDBOX_TOKEN
+        proc = subprocess.run(["pi", "-p", prompt], cwd=WORKSPACE, env=env, text=True, capture_output=True, timeout=120)
+        if proc.returncode == 0 and proc.stdout.strip():
+            return proc.stdout.strip()
+
+    messages: list[dict] = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": prompt},
+    ]
+    url = f"{OPENAI_BASE_URL}/chat/completions"
+
+    for _ in range(6):
+        payload = {
+            "model": MODEL,
+            "messages": messages,
+            "tools": TOOLS,
+        }
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {SANDBOX_TOKEN}",
+                "X-AX-Harness": "pi",
+                "X-AX-Task-Name": TASK_NAME,
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:
+            return f"[pi-local-fallback task={TASK_NAME} model={MODEL}] {exc}"
+
+        choices = data.get("choices", [])
+        if not choices:
+            return "(empty response)"
+        msg = choices[0].get("message", {})
+        messages.append(msg)
+
+        tool_calls = msg.get("tool_calls") or []
+        if not tool_calls:
+            text = (msg.get("content") or "").strip()
+            apply_inline_blocks(text)
+            return text
+
+        for tc in tool_calls:
+            fn = tc.get("function", {})
+            fn_name = fn.get("name", "")
+            raw_args = fn.get("arguments", "{}")
+            try:
+                parsed_args = json.loads(raw_args) if raw_args else {}
+            except Exception:
+                parsed_args = {}
+            res = exec_tool(fn_name, parsed_args)
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc.get("id", "call_1"),
+                    "name": fn_name,
+                    "content": res,
+                }
+            )
+    return "(max tool iterations reached)"
+
+
+def main() -> int:
+    os.makedirs(WORKSPACE, exist_ok=True)
+    os.chdir(WORKSPACE)
+
+    args = [a for a in sys.argv[1:] if a not in ("-p", "--print", "run")]
+    prompt = " ".join(args).strip() or f"Execute TDD repair for {TASK_NAME}"
+    print(run_pi_turn(prompt))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,9 @@
+{
+  "name": "storefront-web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --import ./test/ts-loader.mjs test/storefront.test.mjs"
+  }
+}
