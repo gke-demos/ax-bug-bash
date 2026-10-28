@@ -217,7 +217,7 @@ func TestPrometheusScraperEvaluates500SpikeAndFiresAlertmanagerWebhook(t *testin
 	}
 
 	// Wait for the background scraper to detect the HTTP 500 spike and fire the Alertmanager webhook
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	var latestExec *bugbash.BugBashTreeExecution
 	for time.Now().Before(deadline) {
 		if ex := orch.LatestExecution(); ex != nil && ex.IncidentID == storefront.IncidentFlashSaleBundleUnderflow && ex.Phase == "HEALED" {

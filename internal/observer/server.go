@@ -197,7 +197,7 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 
 	client := cfg.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
+		client = &http.Client{Timeout: 30 * time.Second}
 	}
 
 	sf := cfg.Storefront

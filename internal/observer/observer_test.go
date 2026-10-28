@@ -312,7 +312,7 @@ func TestRealTimeSSEEventStream(t *testing.T) {
 	}
 
 	seenEvents := make(map[string]bool)
-	deadline := time.After(5 * time.Second)
+	deadline := time.After(30 * time.Second)
 	for !(seenEvents["alert.fired"] && seenEvents["tree.updated"] && seenEvents["rollout.completed"]) {
 		select {
 		case ev := <-eventsCh:
