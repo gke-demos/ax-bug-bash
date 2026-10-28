@@ -1,0 +1,260 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: model-gateway
+  namespace: ax-system
+  labels:
+    app.kubernetes.io/name: model-gateway
+    app.kubernetes.io/part-of: ax-bug-bash
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: model-gateway
+  namespace: ax-system
+  labels:
+    app: model-gateway
+    app.kubernetes.io/name: model-gateway
+    app.kubernetes.io/part-of: ax-bug-bash
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: model-gateway
+  template:
+    metadata:
+      labels:
+        app: model-gateway
+        app.kubernetes.io/part-of: ax-bug-bash
+    spec:
+      serviceAccountName: model-gateway
+      containers:
+        - name: model-gateway
+          image: ${IMAGE_REGISTRY}/model-gateway:latest
+          env:
+            - name: LISTEN_ADDR
+              value: ":8080"
+            - name: AGENT_PLATFORM_LOCATION
+              value: "global"
+            - name: GEMINI_FALLBACK_CASCADE
+              value: "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash"
+            - name: ENABLE_FIXTURE_FALLBACK
+              value: "true"
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: model-gateway
+  namespace: ax-system
+  labels:
+    app: model-gateway
+    app.kubernetes.io/part-of: ax-bug-bash
+spec:
+  selector:
+    app: model-gateway
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: storefront
+  namespace: ax-bug-bash
+  labels:
+    app: retail-storefront
+    app.kubernetes.io/name: storefront
+    app.kubernetes.io/part-of: ax-bug-bash
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: retail-storefront
+  template:
+    metadata:
+      labels:
+        app: retail-storefront
+        app.kubernetes.io/name: storefront
+        app.kubernetes.io/part-of: ax-bug-bash
+      annotations:
+        logging.googleapis.com/structured-json: "true"
+    spec:
+      containers:
+        - name: storefront
+          image: ${IMAGE_REGISTRY}/storefront:latest
+          env:
+            - name: STOREFRONT_ADDR
+              value: "0.0.0.0:3001"
+            - name: STOREFRONT_GIT_DIR
+              value: "/var/lib/storefront-git"
+          ports:
+            - name: http
+              containerPort: 3001
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 3001
+            initialDelaySeconds: 1
+            periodSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 3001
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          volumeMounts:
+            - name: git-workspace
+              mountPath: /var/lib/storefront-git
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+      volumes:
+        - name: git-workspace
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: storefront
+  namespace: ax-bug-bash
+  labels:
+    app: retail-storefront
+    app.kubernetes.io/part-of: ax-bug-bash
+spec:
+  selector:
+    app: retail-storefront
+  ports:
+    - name: http
+      port: 3001
+      targetPort: 3001
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: retail-storefront
+  namespace: ax-bug-bash
+  labels:
+    app: retail-storefront
+    app.kubernetes.io/part-of: ax-bug-bash
+spec:
+  selector:
+    app: retail-storefront
+  ports:
+    - name: http
+      port: 3001
+      targetPort: 3001
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ax-observer
+  namespace: ax-bug-bash
+  labels:
+    app.kubernetes.io/name: ax-observer
+    app.kubernetes.io/part-of: ax-bug-bash
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ax-observer
+  namespace: ax-bug-bash
+  labels:
+    app: ax-observer
+    app.kubernetes.io/name: ax-observer
+    app.kubernetes.io/part-of: ax-bug-bash
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ax-observer
+  template:
+    metadata:
+      labels:
+        app: ax-observer
+        app.kubernetes.io/part-of: ax-bug-bash
+    spec:
+      serviceAccountName: ax-observer
+      containers:
+        - name: ax-observer
+          image: ${IMAGE_REGISTRY}/ax-observer:latest
+          env:
+            - name: LISTEN_ADDR
+              value: "0.0.0.0:3000"
+            - name: ALL_IN_ONE
+              value: "false"
+            - name: STOREFRONT_URL
+              value: "http://storefront.ax-bug-bash.svc.cluster.local:3001"
+            - name: STOREFRONT_GIT_URL
+              value: "http://storefront.ax-bug-bash.svc.cluster.local:3001/git/storefront.git"
+            - name: MODEL_GATEWAY_URL
+              value: "http://model-gateway.ax-system.svc.cluster.local:8080"
+            - name: AX_SERVER_ADDR
+              value: "ax-server.ax-system.svc.cluster.local:9090"
+            # Agent Substrate v0.6.0 requires task-runner images with SnapshotConfig to be pinned by @sha256: digest
+            - name: AX_DEFAULT_TASK_IMAGE
+              value: "${IMAGE_REGISTRY}/ax-task-runner@sha256:${TASK_RUNNER_SHA256}"
+          ports:
+            - name: http
+              containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 3000
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ax-observer
+  namespace: ax-bug-bash
+  labels:
+    app: ax-observer
+    app.kubernetes.io/part-of: ax-bug-bash
+spec:
+  selector:
+    app: ax-observer
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
