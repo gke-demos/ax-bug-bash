@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gke-demos/ax-bug-bash/internal/bugbash"
+	"github.com/gke-demos/ax-bug-bash/internal/httputil"
 	"github.com/gke-demos/ax-bug-bash/internal/storefront"
 )
 
@@ -125,7 +126,7 @@ func (b *AlertmanagerBridge) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/webhooks/alertmanager", b.HandleWebhook)
 	mux.HandleFunc("/api/monitoring/alerts", b.HandleListAlerts)
-	return withSecurityHeaders(mux)
+	return httputil.WithSecurityHeaders(mux)
 }
 
 // HandleListAlerts handles GET /api/monitoring/alerts.
@@ -134,7 +135,7 @@ func (b *AlertmanagerBridge) HandleListAlerts(w http.ResponseWriter, r *http.Req
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"alerts":        b.ListAlerts(),
 		"latest_alert":  b.LatestAlert(),
 		"scrape_window": "5s (for: 0s)",
@@ -149,20 +150,20 @@ func (b *AlertmanagerBridge) HandleWebhook(w http.ResponseWriter, r *http.Reques
 	}
 	var payload AlertmanagerWebhookPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid Alertmanager v4 JSON payload"})
+		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid Alertmanager v4 JSON payload"})
 		return
 	}
 	if len(payload.Alerts) == 0 && payload.Status == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "alerts list cannot be empty"})
+		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "alerts list cannot be empty"})
 		return
 	}
 
 	resp, err := b.ProcessWebhook(r.Context(), payload)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		httputil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, resp)
+	httputil.WriteJSON(w, http.StatusOK, resp)
 }
 
 // ProcessWebhook enriches an AlertmanagerWebhookPayload with Loki logs, deduplicates in-flight alerts,
@@ -553,27 +554,4 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
-}
-
-func withSecurityHeaders(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet, http.MethodPost, http.MethodHead, http.MethodOptions:
-		default:
-			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'")
-		next.ServeHTTP(w, r)
-	})
-}
-
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
 }

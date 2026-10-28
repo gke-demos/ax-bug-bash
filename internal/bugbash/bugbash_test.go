@@ -45,7 +45,7 @@ func TestAXServerAllocatesAndReclaimsSubstrateWorkerSlotsOnSuspend(t *testing.T)
 	// 1. Register Workspace and Model via AXClient
 	ws, err := client.UpdateWorkspace(ctx, &v1alpha1.UpdateWorkspaceRequest{
 		Workspace: &v1alpha1.Workspace{
-			Metadata: &v1alpha1.ObjectMeta{Name: "storefront-ws", Atespace: "default"},
+			Metadata: &v1alpha1.ObjectMeta{Name: DefaultWorkspaceName, Atespace: "default"},
 			Spec: &v1alpha1.WorkspaceSpec{
 				Git: []*v1alpha1.GitRepo{
 					{Name: "storefront", Repo: "http://storefront.default:3001/git/storefront.git", Branch: "main", Dir: "."},
@@ -56,8 +56,8 @@ func TestAXServerAllocatesAndReclaimsSubstrateWorkerSlotsOnSuspend(t *testing.T)
 	if err != nil {
 		t.Fatalf("UpdateWorkspace failed: %v", err)
 	}
-	if ws.GetMetadata().GetName() != "storefront-ws" {
-		t.Fatalf("expected workspace storefront-ws, got %q", ws.GetMetadata().GetName())
+	if ws.GetMetadata().GetName() != DefaultWorkspaceName {
+		t.Fatalf("expected workspace %s, got %q", DefaultWorkspaceName, ws.GetMetadata().GetName())
 	}
 
 	cfgStruct, err := structpb.NewStruct(map[string]any{
@@ -75,7 +75,7 @@ func TestAXServerAllocatesAndReclaimsSubstrateWorkerSlotsOnSuspend(t *testing.T)
 		Task: &v1alpha1.Task{
 			Metadata: &v1alpha1.ObjectMeta{Name: "fixer-inc-101-pricing-service", Atespace: "default"},
 			Spec: &v1alpha1.TaskSpec{
-				Workspace: &v1alpha1.WorkspaceRef{Name: "storefront-ws", Path: "/workspace"},
+				Workspace: &v1alpha1.WorkspaceRef{Name: DefaultWorkspaceName, Path: "/workspace"},
 				Resources: &v1alpha1.ResourcesSpec{
 					Limits: &v1alpha1.ResourceList{Cpu: "1000m", Memory: "2048Mi"},
 				},
@@ -245,7 +245,7 @@ func TestRootTriageSpawnsOnlyImplicatedServicesAndSupportsMultiHarness(t *testin
 		parentName := "triage-" + tc.incidentID
 		spawned, err := SpawnChildTasksForTriage(ctx, axClient, parentName, plan, SpawnChildOptions{
 			Atespace:      "default",
-			WorkspaceName: "storefront-ws",
+			WorkspaceName: DefaultWorkspaceName,
 			WorkspacePath: "/workspace",
 		})
 		if err != nil {
@@ -264,6 +264,9 @@ func TestRootTriageSpawnsOnlyImplicatedServicesAndSupportsMultiHarness(t *testin
 			}
 			if cfgMap["harness"] != tc.wantHarnesses[i] {
 				t.Fatalf("[%s] child config harness = %v, want %s", tc.incidentID, cfgMap["harness"], tc.wantHarnesses[i])
+			}
+			if cfgMap["failing_request"] == nil {
+				t.Fatalf("[%s] expected child config failing_request to be populated, got nil", tc.incidentID)
 			}
 		}
 	}
@@ -497,7 +500,7 @@ func TestCustomRunnerEmbedsAXRunnerCapturesDiffAndAutoSuspendsOnExit(t *testing.
 				{Name: "MODEL_GATEWAY_URL", Value: gwHTTP.URL},
 			},
 			Workspace: &v1alpha1.WorkspaceRef{
-				Name: "storefront-ws",
+				Name: DefaultWorkspaceName,
 				Path: wsDir,
 			},
 			Resources: &v1alpha1.ResourcesSpec{

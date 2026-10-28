@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pi (@mariozechner/pi-coding-agent) CLI harness wrapper talking to Model Gateway (/s/{task_name})."""
+"""Pi (@mariozechner/pi-coding-agent) CLI coding harness talking to Model Gateway (/s/{task_name})."""
 
 import json
 import os

@@ -7,8 +7,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
+
+	"github.com/gke-demos/ax-bug-bash/internal/storefront"
 )
 
 // CascadeAttempt records a single upstream candidate model attempt inside the fallback cascade.
@@ -192,14 +196,75 @@ func (s *Server) ExecuteGeminiCascade(
 	}, fmt.Errorf("all models in Gemini Flash fallback cascade failed (%d attempts)", len(attempts))
 }
 
-// SynthesizeFixtureGeminiResult constructs a deterministic Gemini generateContent response for offline/CI test runs.
-func SynthesizeFixtureGeminiResult(taskName, action string, geminiReqBody []byte, attempts []CascadeAttempt) CascadeResult {
-	promptSummary := extractPromptSummary(geminiReqBody)
-	replyText := fmt.Sprintf(
+var (
+	fixturePhaseRe    = regexp.MustCompile(`\bPHASE=(REPRODUCE_RED|PATCH_GREEN)\b`)
+	fixtureIncidentRe = regexp.MustCompile(`\bINCIDENT_ID=([A-Za-z0-9-]+)\b`)
+	fixtureServiceRe  = regexp.MustCompile(`\bSERVICE=([a-z0-9-]+)\b`)
+)
+
+// SynthesizeFixtureText generates deterministic model output for offline/CI test runs.
+// When the prompt contains structured TDD context (PHASE=REPRODUCE_RED or PHASE=PATCH_GREEN,
+// INCIDENT_ID=<id>, and SERVICE=<svc>), it emits a real <file path="...">...</file> block
+// containing the scenario's regression test or patched source file so the harness file-extractor
+// genuinely parses and writes the model's <file> block.
+func SynthesizeFixtureText(taskName, promptText string) string {
+	phaseMatch := fixturePhaseRe.FindStringSubmatch(promptText)
+	incMatch := fixtureIncidentRe.FindStringSubmatch(promptText)
+	svcMatch := fixtureServiceRe.FindStringSubmatch(promptText)
+
+	if len(phaseMatch) == 2 && len(incMatch) == 2 && len(svcMatch) == 2 {
+		phase := phaseMatch[1]
+		incidentID := strings.ToUpper(incMatch[1])
+		service := svcMatch[1]
+		if sc, ok := storefront.GetScenario(incidentID); ok {
+			if detail, ok := sc.ServiceTraces[service]; ok {
+				switch phase {
+				case "REPRODUCE_RED":
+					relPath := filepath.ToSlash(filepath.Join("services", service, detail.TestFile))
+					return fmt.Sprintf(
+						"[FIXTURE:%s] Authored failing regression test %s for %s/%s:\n<file path=%q>\n%s</file>",
+						taskName,
+						detail.RegressionTestName,
+						incidentID,
+						service,
+						relPath,
+						detail.RegressionTestFileContent,
+					)
+				case "PATCH_GREEN":
+					relPath := filepath.ToSlash(filepath.Join("services", service, detail.SourceFile))
+					return fmt.Sprintf(
+						"[FIXTURE:%s] Patched %s for %s/%s so %s passes:\n<file path=%q>\n%s</file>",
+						taskName,
+						detail.SourceFile,
+						incidentID,
+						service,
+						detail.RegressionTestName,
+						relPath,
+						detail.PatchedSourceFileContent,
+					)
+				}
+			}
+		}
+	}
+
+	promptSummary := strings.TrimSpace(promptText)
+	if len(promptSummary) > 96 {
+		promptSummary = promptSummary[:96]
+	}
+	if promptSummary == "" {
+		promptSummary = "incident-remediation"
+	}
+	return fmt.Sprintf(
 		"[FIXTURE:%s] Deterministic Gemini Enterprise Agent Platform synthesis for %s",
 		taskName,
 		promptSummary,
 	)
+}
+
+// SynthesizeFixtureGeminiResult constructs a deterministic Gemini generateContent response for offline/CI test runs.
+func SynthesizeFixtureGeminiResult(taskName, action string, geminiReqBody []byte, attempts []CascadeAttempt) CascadeResult {
+	promptText := extractPromptText(geminiReqBody)
+	replyText := SynthesizeFixtureText(taskName, promptText)
 
 	inTok := int64(len(geminiReqBody)/4) + 16
 	outTok := int64(len(replyText)/4) + 12
@@ -243,7 +308,7 @@ func SynthesizeFixtureGeminiResult(taskName, action string, geminiReqBody []byte
 	}
 }
 
-func extractPromptSummary(geminiReqBody []byte) string {
+func extractPromptText(geminiReqBody []byte) string {
 	var parsed struct {
 		Contents []struct {
 			Parts []struct {
@@ -255,9 +320,6 @@ func extractPromptSummary(geminiReqBody []byte) string {
 		for i := len(parsed.Contents) - 1; i >= 0; i-- {
 			for _, p := range parsed.Contents[i].Parts {
 				if t := strings.TrimSpace(p.Text); t != "" {
-					if len(t) > 96 {
-						return t[:96]
-					}
 					return t
 				}
 			}

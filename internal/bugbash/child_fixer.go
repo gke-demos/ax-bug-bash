@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gke-demos/ax-bug-bash/internal/gateway"
+	"github.com/gke-demos/ax-bug-bash/internal/httputil"
 	"github.com/gke-demos/ax-bug-bash/internal/storefront"
 )
 
@@ -164,17 +165,23 @@ func ExecuteChildFixerTDD(ctx context.Context, cfg ChildFixerConfig) (ChildTaskR
 
 	// Phase 1: REPRODUCE_RED — invoke Coding Harness through Model Gateway, write new Regression Test, verify it fails (Red).
 	phase1Start := time.Now()
+	relTestPath := filepath.ToSlash(filepath.Join("services", mission.Service, detail.TestFile))
 	redPrompt := fmt.Sprintf(
-		"[%s/%s] Author failing regression test %s in %s reproducing HTTP 500 %s:\n%s",
+		"PHASE=REPRODUCE_RED INCIDENT_ID=%s SERVICE=%s TARGET_FILE=%s\n[%s/%s] Author failing regression test %s in %s reproducing HTTP 500 %s:\n%s\nEmit the updated file inside <file path=%q>...</file>.",
+		mission.IncidentID,
+		mission.Service,
+		relTestPath,
 		mission.IncidentID,
 		mission.Service,
 		detail.RegressionTestName,
 		detail.TestFile,
 		detail.ErrorMessage,
 		detail.StackTrace,
+		relTestPath,
 	)
+	wroteRedFromGateway := false
 	if cfg.ModelGatewayURL != "" {
-		_, activeModel, prov, err := InvokeCodingHarnessPrompt(ctx, cfg.ModelGatewayURL, mission.TaskName, mission.Harness, mission.RequestedModel, redPrompt)
+		replyText, activeModel, prov, err := InvokeCodingHarnessPrompt(ctx, cfg.ModelGatewayURL, mission.TaskName, mission.Harness, mission.RequestedModel, redPrompt)
 		if err == nil {
 			if activeModel != "" {
 				res.ActiveModel = activeModel
@@ -182,12 +189,17 @@ func ExecuteChildFixerTDD(ctx context.Context, cfg ChildFixerConfig) (ChildTaskR
 			if prov != "" {
 				res.SourceProvenance = prov
 			}
+			if written, wErr := extractAndWriteFileBlocks(cfg.WorkspaceDir, replyText); wErr == nil && written[relTestPath] {
+				wroteRedFromGateway = true
+			}
 		}
 	}
 
-	testFilePath := filepath.Join(cfg.WorkspaceDir, "services", mission.Service, detail.TestFile)
-	if err := os.WriteFile(testFilePath, []byte(detail.RegressionTestFileContent), 0o644); err != nil {
-		return res, fmt.Errorf("writing regression test %s: %w", testFilePath, err)
+	if !wroteRedFromGateway {
+		testFilePath := filepath.Join(cfg.WorkspaceDir, "services", mission.Service, detail.TestFile)
+		if err := os.WriteFile(testFilePath, []byte(detail.RegressionTestFileContent), 0o644); err != nil {
+			return res, fmt.Errorf("writing regression test %s: %w", testFilePath, err)
+		}
 	}
 
 	redOut, redErr := runServiceTestSuite(ctx, cfg.WorkspaceDir, mission.Service)
@@ -208,15 +220,21 @@ func ExecuteChildFixerTDD(ctx context.Context, cfg ChildFixerConfig) (ChildTaskR
 
 	// Phase 2: PATCH_GREEN — invoke Coding Harness through Model Gateway, patch service source code, verify all tests pass (Green).
 	phase2Start := time.Now()
+	relSrcPath := filepath.ToSlash(filepath.Join("services", mission.Service, detail.SourceFile))
 	greenPrompt := fmt.Sprintf(
-		"[%s/%s] Patch %s so regression test %s and all pre-existing unit tests pass.",
+		"PHASE=PATCH_GREEN INCIDENT_ID=%s SERVICE=%s TARGET_FILE=%s\n[%s/%s] Patch %s so regression test %s and all pre-existing unit tests pass.\nEmit the patched file inside <file path=%q>...</file>.",
+		mission.IncidentID,
+		mission.Service,
+		relSrcPath,
 		mission.IncidentID,
 		mission.Service,
 		detail.SourceFile,
 		detail.RegressionTestName,
+		relSrcPath,
 	)
+	wroteGreenFromGateway := false
 	if cfg.ModelGatewayURL != "" {
-		_, activeModel, prov, err := InvokeCodingHarnessPrompt(ctx, cfg.ModelGatewayURL, mission.TaskName, mission.Harness, mission.RequestedModel, greenPrompt)
+		replyText, activeModel, prov, err := InvokeCodingHarnessPrompt(ctx, cfg.ModelGatewayURL, mission.TaskName, mission.Harness, mission.RequestedModel, greenPrompt)
 		if err == nil {
 			if activeModel != "" {
 				res.ActiveModel = activeModel
@@ -224,12 +242,17 @@ func ExecuteChildFixerTDD(ctx context.Context, cfg ChildFixerConfig) (ChildTaskR
 			if prov != "" {
 				res.SourceProvenance = prov
 			}
+			if written, wErr := extractAndWriteFileBlocks(cfg.WorkspaceDir, replyText); wErr == nil && written[relSrcPath] {
+				wroteGreenFromGateway = true
+			}
 		}
 	}
 
-	srcFilePath := filepath.Join(cfg.WorkspaceDir, "services", mission.Service, detail.SourceFile)
-	if err := os.WriteFile(srcFilePath, []byte(detail.PatchedSourceFileContent), 0o644); err != nil {
-		return res, fmt.Errorf("writing patched source %s: %w", srcFilePath, err)
+	if !wroteGreenFromGateway {
+		srcFilePath := filepath.Join(cfg.WorkspaceDir, "services", mission.Service, detail.SourceFile)
+		if err := os.WriteFile(srcFilePath, []byte(detail.PatchedSourceFileContent), 0o644); err != nil {
+			return res, fmt.Errorf("writing patched source %s: %w", srcFilePath, err)
+		}
 	}
 
 	greenOut, greenErr := runServiceTestSuite(ctx, cfg.WorkspaceDir, mission.Service)
@@ -325,7 +348,7 @@ func InvokeCodingHarnessPrompt(
 		if resp.StatusCode >= 400 {
 			return "", "", "", fmt.Errorf("model gateway status %d: %s", resp.StatusCode, string(body))
 		}
-		return string(body), resp.Header.Get("X-AX-Active-Model"), resp.Header.Get("X-AX-Source-Provenance"), nil
+		return extractGeminiResponseText(body), resp.Header.Get("X-AX-Active-Model"), resp.Header.Get("X-AX-Source-Provenance"), nil
 	}
 
 	// OpenCode ("opencode") and Pi ("pi") use the OpenAI-compatible /v1/chat/completions endpoint
@@ -355,7 +378,91 @@ func InvokeCodingHarnessPrompt(
 	if resp.StatusCode >= 400 {
 		return "", "", "", fmt.Errorf("model gateway status %d: %s", resp.StatusCode, string(body))
 	}
-	return string(body), resp.Header.Get("X-AX-Active-Model"), resp.Header.Get("X-AX-Source-Provenance"), nil
+	return extractOpenAIResponseText(body), resp.Header.Get("X-AX-Active-Model"), resp.Header.Get("X-AX-Source-Provenance"), nil
+}
+
+func extractGeminiResponseText(body []byte) string {
+	var parsed struct {
+		Candidates []struct {
+			Content struct {
+				Parts []struct {
+					Text string `json:"text"`
+				} `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
+	}
+	if err := json.Unmarshal(body, &parsed); err == nil && len(parsed.Candidates) > 0 {
+		var sb strings.Builder
+		for _, p := range parsed.Candidates[0].Content.Parts {
+			sb.WriteString(p.Text)
+		}
+		if sb.Len() > 0 {
+			return sb.String()
+		}
+	}
+	return string(body)
+}
+
+func extractOpenAIResponseText(body []byte) string {
+	var parsed struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(body, &parsed); err == nil && len(parsed.Choices) > 0 {
+		if parsed.Choices[0].Message.Content != "" {
+			return parsed.Choices[0].Message.Content
+		}
+	}
+	return string(body)
+}
+
+// extractAndWriteFileBlocks parses <file path="services/...">...</file> blocks from a model response
+// and writes them safely inside workDir, returning the set of relative slash paths written.
+func extractAndWriteFileBlocks(workDir, responseText string) (map[string]bool, error) {
+	written := make(map[string]bool)
+	absRoot, err := filepath.Abs(workDir)
+	if err != nil {
+		return written, err
+	}
+	remaining := responseText
+	for {
+		openIdx := strings.Index(remaining, `<file path="`)
+		if openIdx < 0 {
+			break
+		}
+		afterOpen := remaining[openIdx+len(`<file path="`):]
+		quoteEnd := strings.Index(afterOpen, `">`)
+		if quoteEnd < 0 {
+			break
+		}
+		relPath := filepath.ToSlash(filepath.Clean(strings.TrimSpace(afterOpen[:quoteEnd])))
+		bodyStart := afterOpen[quoteEnd+2:]
+		closeIdx := strings.Index(bodyStart, "</file>")
+		if closeIdx < 0 {
+			break
+		}
+		content := strings.TrimPrefix(bodyStart[:closeIdx], "\n")
+		remaining = bodyStart[closeIdx+len("</file>"):]
+
+		if strings.HasPrefix(relPath, "../") || strings.HasPrefix(relPath, "/") || relPath == "." || relPath == "" {
+			continue
+		}
+		dst := filepath.Join(absRoot, filepath.FromSlash(relPath))
+		if !strings.HasPrefix(dst, absRoot+string(filepath.Separator)) {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return written, err
+		}
+		if err := os.WriteFile(dst, []byte(content), 0o644); err != nil {
+			return written, err
+		}
+		written[relPath] = true
+	}
+	return written, nil
 }
 
 // CaptureWorkspaceGitDiff runs `git diff` inside workspaceDir (optionally scoped to relPath).
@@ -377,7 +484,7 @@ func runServiceTestSuite(ctx context.Context, workspaceDir, service string) (str
 	scriptPath := filepath.Join(workspaceDir, "services", "run-service-tests.sh")
 	cmd := exec.CommandContext(ctx, "bash", scriptPath, service)
 	cmd.Dir = workspaceDir
-	cmd.Env = append(os.Environ(), "PATH=/usr/local/google/home/mofi/.local/go/bin:"+os.Getenv("PATH"))
+	cmd.Env = httputil.EnsureGoBinOnPath(os.Environ())
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gke-demos/ax-bug-bash/internal/httputil"
 	"github.com/gke-demos/ax-bug-bash/internal/storefront"
 )
 
@@ -26,6 +27,7 @@ type ScraperConfig struct {
 	RolloutBridge      *RolloutBridge
 	WebhookURL         string
 	ScrapeInterval     time.Duration
+	DisableAutoWebhook bool
 	HTTPClient         *http.Client
 }
 
@@ -242,7 +244,7 @@ func (s *Scraper) ScrapeOnce(ctx context.Context) (MetricsSnapshot, error) {
 	snapCopy := cloneMetricsSnapshot(s.snapshot)
 	s.mu.Unlock()
 
-	if shouldFire && detectedIncidentID != "" {
+	if shouldFire && detectedIncidentID != "" && !s.cfg.DisableAutoWebhook {
 		s.fireAlertmanagerWebhook(ctx, detectedIncidentID, spikedServices, now)
 		s.mu.Lock()
 		s.dispatchedInFlight[detectedIncidentID] = false
@@ -382,10 +384,10 @@ func (s *Scraper) fetchLogs(ctx context.Context) []storefront.LogEntry {
 func (s *Scraper) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+		httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 	})
 	mux.HandleFunc("/api/monitoring/metrics", s.handleMetricsSnapshot)
 	mux.HandleFunc("/api/monitoring/alerts", s.handleAlertsSnapshot)
@@ -401,7 +403,7 @@ func (s *Scraper) Handler() http.Handler {
 	mux.HandleFunc("/monitoring/dashboard.js", s.handleMonitoringScript)
 	mux.HandleFunc("/monitoring", s.handleMonitoringUI)
 	mux.HandleFunc("/", s.handleMonitoringUI)
-	return withSecurityHeaders(mux)
+	return httputil.WithSecurityHeaders(mux)
 }
 
 func (s *Scraper) handleMetricsSnapshot(w http.ResponseWriter, r *http.Request) {
@@ -413,7 +415,7 @@ func (s *Scraper) handleMetricsSnapshot(w http.ResponseWriter, r *http.Request) 
 	if snap.LastScrapeAt.IsZero() {
 		snap, _ = s.ScrapeOnce(r.Context())
 	}
-	writeJSON(w, http.StatusOK, snap)
+	httputil.WriteJSON(w, http.StatusOK, snap)
 }
 
 func (s *Scraper) handleAlertsSnapshot(w http.ResponseWriter, r *http.Request) {
@@ -425,7 +427,7 @@ func (s *Scraper) handleAlertsSnapshot(w http.ResponseWriter, r *http.Request) {
 		s.cfg.AlertmanagerBridge.HandleListAlerts(w, r)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"alerts":        []EnrichedAlertRecord{},
 		"scrape_window": "5s (for: 0s)",
 	})
@@ -437,13 +439,13 @@ func (s *Scraper) handleRolloutsSnapshot(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if s.cfg.RolloutBridge != nil {
-		writeJSON(w, http.StatusOK, map[string]any{
+		httputil.WriteJSON(w, http.StatusOK, map[string]any{
 			"rollouts":       s.cfg.RolloutBridge.ListRollouts(),
 			"latest_rollout": s.cfg.RolloutBridge.LatestRollout(),
 		})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"rollouts": []RolloutReport{},
 	})
 }
@@ -683,15 +685,82 @@ const monitoringDashboardJS = `(function () {
   if (btnDark) btnDark.addEventListener('click', function () { setTheme('dark'); });
   if (btnLight) btnLight.addEventListener('click', function () { setTheme('light'); });
 
+  function renderMetrics(data) {
+    var el = document.getElementById('metrics-container');
+    if (!el || !data) return;
+    el.replaceChildren();
+    var summary = document.createElement('div');
+    summary.textContent = 'Rule: ' + data.alert_rule_name + ' (' + data.alert_rule_state + ') | Total 200s: ' + data.total_http_200 + ' | Total 500s: ' + data.total_http_500;
+    el.appendChild(summary);
+    if (data.http_500_by_service) {
+      var list = document.createElement('div');
+      list.style.marginTop = '8px';
+      list.style.fontSize = '12px';
+      Object.keys(data.http_500_by_service).forEach(function (svc) {
+        var row = document.createElement('div');
+        var count200 = (data.http_200_by_service && data.http_200_by_service[svc]) || 0;
+        var count500 = data.http_500_by_service[svc] || 0;
+        row.textContent = svc + ' -> HTTP 200: ' + count200 + ' | HTTP 500: ' + count500;
+        list.appendChild(row);
+      });
+      el.appendChild(list);
+    }
+  }
+
+  function renderAlerts(data) {
+    var el = document.getElementById('alerts-container');
+    if (!el || !data) return;
+    el.replaceChildren();
+    var alerts = Array.isArray(data.alerts) ? data.alerts : [];
+    if (alerts.length === 0) {
+      var empty = document.createElement('div');
+      empty.textContent = 'No firing alerts (' + (data.scrape_window || '5s') + ')';
+      el.appendChild(empty);
+      return;
+    }
+    alerts.slice(0, 5).forEach(function (alert) {
+      var item = document.createElement('div');
+      item.style.marginBottom = '8px';
+      item.style.fontSize = '12px';
+      var svcs = Array.isArray(alert.services) ? alert.services.join(', ') : '';
+      var header = document.createElement('div');
+      header.textContent = '[' + (alert.status || '').toUpperCase() + '] ' + (alert.alert_name || 'StorefrontHTTP500Spike') + ' (' + (alert.incident_id || '') + ') -> ' + svcs;
+      item.appendChild(header);
+      if (alert.triggered_root_task) {
+        var taskLine = document.createElement('div');
+        taskLine.textContent = 'Root Task: ' + alert.triggered_root_task + ' | Breadcrumbs: ' + ((alert.loki_breadcrumbs && alert.loki_breadcrumbs.length) || 0);
+        item.appendChild(taskLine);
+      }
+      el.appendChild(item);
+    });
+  }
+
+  function renderRollouts(data) {
+    var el = document.getElementById('rollouts-container');
+    if (!el || !data) return;
+    el.replaceChildren();
+    var rollouts = Array.isArray(data.rollouts) ? data.rollouts : [];
+    if (rollouts.length === 0) {
+      var empty = document.createElement('div');
+      empty.textContent = 'No rollouts recorded yet';
+      el.appendChild(empty);
+      return;
+    }
+    rollouts.slice(0, 5).forEach(function (ro) {
+      var item = document.createElement('div');
+      item.style.marginBottom = '8px';
+      item.style.fontSize = '12px';
+      var updatedNames = Array.isArray(ro.updated_services) ? ro.updated_services.map(function (u) { return u.service; }).join(', ') : '';
+      var skippedNames = Array.isArray(ro.skipped_services) ? ro.skipped_services.join(', ') : '';
+      item.textContent = '[' + (ro.incident_id || '') + '] Commit ' + (ro.commit_sha || 'HEAD') + ' | Updated: ' + updatedNames + ' | Skipped: ' + skippedNames + ' | Duration: ' + (ro.total_duration_ms || 0) + 'ms (<10s SLA: ' + Boolean(ro.under_ten_second_sla) + ')';
+      el.appendChild(item);
+    });
+  }
+
   function refresh() {
-    fetch('/api/monitoring/metrics').then(function (r) { return r.json(); }).then(function (data) {
-      var el = document.getElementById('metrics-container');
-      if (!el) return;
-      el.replaceChildren();
-      var summary = document.createElement('div');
-      summary.textContent = 'Rule: ' + data.alert_rule_name + ' (' + data.alert_rule_state + ') | Total 200s: ' + data.total_http_200 + ' | Total 500s: ' + data.total_http_500;
-      el.appendChild(summary);
-    }).catch(function () {});
+    fetch('/api/monitoring/metrics').then(function (r) { return r.json(); }).then(renderMetrics).catch(function () {});
+    fetch('/api/monitoring/alerts').then(function (r) { return r.json(); }).then(renderAlerts).catch(function () {});
+    fetch('/api/monitoring/rollouts').then(function (r) { return r.json(); }).then(renderRollouts).catch(function () {});
   }
   refresh();
   setInterval(refresh, 2000);

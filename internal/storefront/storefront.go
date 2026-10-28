@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gke-demos/ax-bug-bash/internal/httputil"
 )
 
 //go:embed static/*
@@ -273,24 +275,7 @@ func (rt *Runtime) Handler() http.Handler {
 	mux.HandleFunc("/metrics", rt.handleMetrics)
 	mux.HandleFunc("/", rt.handleIndex)
 
-	return withSecurityHeaders(mux)
-}
-
-func withSecurityHeaders(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Standard HTTP method allow-list: GET, POST, HEAD, OPTIONS
-		switch r.Method {
-		case http.MethodGet, http.MethodPost, http.MethodHead, http.MethodOptions:
-		default:
-			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'")
-		next.ServeHTTP(w, r)
-	})
+	return httputil.WithSecurityHeaders(mux)
 }
 
 func (rt *Runtime) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -619,8 +604,5 @@ func (rt *Runtime) handleMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
+	httputil.WriteJSON(w, status, payload)
 }

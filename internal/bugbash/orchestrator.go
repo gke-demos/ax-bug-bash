@@ -303,7 +303,7 @@ func (o *Orchestrator) TriggerIncidentBugBash(ctx context.Context, req TriggerRe
 	// Register Workspace and Model on ax-server
 	_, _ = o.axClient.UpdateWorkspace(ctx, &v1alpha1.UpdateWorkspaceRequest{
 		Workspace: &v1alpha1.Workspace{
-			Metadata: &v1alpha1.ObjectMeta{Name: "storefront-ws", Atespace: "default"},
+			Metadata: &v1alpha1.ObjectMeta{Name: DefaultWorkspaceName, Atespace: "default"},
 			Spec: &v1alpha1.WorkspaceSpec{
 				Git: []*v1alpha1.GitRepo{
 					{Name: "storefront", Repo: gitSource, Branch: "main", Dir: "."},
@@ -331,7 +331,7 @@ func (o *Orchestrator) TriggerIncidentBugBash(ctx context.Context, req TriggerRe
 		Kind:       v1alpha1.KindTask,
 		Metadata:   &v1alpha1.ObjectMeta{Name: rootTaskName, Atespace: "default"},
 		Spec: &v1alpha1.TaskSpec{
-			Workspace: &v1alpha1.WorkspaceRef{Name: "storefront-ws", Path: "/workspace"},
+			Workspace: &v1alpha1.WorkspaceRef{Name: DefaultWorkspaceName, Path: "/workspace"},
 			Resources: &v1alpha1.ResourcesSpec{
 				Limits: &v1alpha1.ResourceList{Cpu: "1000m", Memory: "2048Mi"},
 			},
@@ -360,7 +360,7 @@ func (o *Orchestrator) TriggerIncidentBugBash(ctx context.Context, req TriggerRe
 	// 3. Dynamically spawn Child Tasks on ax-server (ONLY for the 2-3 implicated services)
 	spawnedTasks, err := SpawnChildTasksForTriage(ctx, o.axClient, rootTaskName, plan, SpawnChildOptions{
 		Atespace:      "default",
-		WorkspaceName: "storefront-ws",
+		WorkspaceName: DefaultWorkspaceName,
 		WorkspacePath: "/workspace",
 		NameSuffix:    seqStr,
 	})
@@ -488,7 +488,7 @@ func (o *Orchestrator) TriggerIncidentBugBash(ctx context.Context, req TriggerRe
 	tree.Phase = "MERGING_ROLLOUT"
 	o.mu.Unlock()
 
-	if err := applyChildPatchesToRootWorkspace(ctx, rootWorkDir, sc, plan.ImplicatedServices); err != nil {
+	if err := applyChildPatchesToRootWorkspace(ctx, rootWorkDir, sc, plan.ImplicatedServices, childResults); err != nil {
 		return nil, fmt.Errorf("merging child patches in root task: %w", err)
 	}
 
@@ -572,20 +572,41 @@ func applyChildPatchesToRootWorkspace(
 	rootWorkDir string,
 	sc storefront.IncidentScenario,
 	implicatedServices []string,
+	childResults []ChildTaskResult,
 ) error {
+	diffByService := make(map[string]string, len(childResults))
+	for _, cr := range childResults {
+		if strings.TrimSpace(cr.UnifiedGitDiff) != "" {
+			diffByService[cr.Service] = cr.UnifiedGitDiff
+		}
+	}
+
 	for _, svc := range implicatedServices {
-		detail, ok := sc.ServiceTraces[svc]
-		if !ok {
-			continue
+		appliedDiff := false
+		if patch := strings.TrimSpace(diffByService[svc]); patch != "" {
+			cmd := exec.CommandContext(ctx, "git", "apply", "--whitespace=nowarn", "-")
+			cmd.Dir = rootWorkDir
+			cmd.Stdin = strings.NewReader(patch + "\n")
+			if err := cmd.Run(); err == nil {
+				appliedDiff = true
+			}
 		}
-		testPath := filepath.Join(rootWorkDir, "services", svc, detail.TestFile)
-		if err := os.WriteFile(testPath, []byte(detail.RegressionTestFileContent), 0o644); err != nil {
-			return err
+
+		if !appliedDiff {
+			detail, ok := sc.ServiceTraces[svc]
+			if !ok {
+				continue
+			}
+			testPath := filepath.Join(rootWorkDir, "services", svc, detail.TestFile)
+			if err := os.WriteFile(testPath, []byte(detail.RegressionTestFileContent), 0o644); err != nil {
+				return err
+			}
+			srcPath := filepath.Join(rootWorkDir, "services", svc, detail.SourceFile)
+			if err := os.WriteFile(srcPath, []byte(detail.PatchedSourceFileContent), 0o644); err != nil {
+				return err
+			}
 		}
-		srcPath := filepath.Join(rootWorkDir, "services", svc, detail.SourceFile)
-		if err := os.WriteFile(srcPath, []byte(detail.PatchedSourceFileContent), 0o644); err != nil {
-			return err
-		}
+
 		if out, err := runServiceTestSuite(ctx, rootWorkDir, svc); err != nil {
 			return fmt.Errorf("cross-service verification failed on %s: %w\n%s", svc, err, out)
 		}

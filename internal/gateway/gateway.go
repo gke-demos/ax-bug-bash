@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gke-demos/ax-bug-bash/internal/httputil"
 )
 
 // SourceProvenance indicates whether a model response came from live Gemini Enterprise Agent Platform or deterministic fixture synthesis.
@@ -73,12 +75,12 @@ func DefaultConfig() Config {
 		}
 	}
 
-	projectID := envOr("PROJECT_ID", envOr("GOOGLE_CLOUD_PROJECT", "ax-bug-bash"))
+	projectID := httputil.EnvOr("PROJECT_ID", httputil.EnvOr("GOOGLE_CLOUD_PROJECT", "ax-bug-bash"))
 	return Config{
-		ListenAddr:            envOr("LISTEN_ADDR", ":8080"),
+		ListenAddr:            httputil.EnvOr("LISTEN_ADDR", ":8080"),
 		ProjectID:             projectID,
-		Location:              envOr("AGENT_PLATFORM_LOCATION", "global"),
-		AgentPlatformBaseURL:  envOr("AGENT_PLATFORM_BASE_URL", "https://aiplatform.googleapis.com"),
+		Location:              httputil.EnvOr("AGENT_PLATFORM_LOCATION", "global"),
+		AgentPlatformBaseURL:  httputil.EnvOr("AGENT_PLATFORM_BASE_URL", "https://aiplatform.googleapis.com"),
 		FallbackCascade:       cascade,
 		EnableFixtureFallback: enableFixture,
 		ZeroSecretMode:        true,
@@ -595,11 +597,4 @@ func writeJSONError(w http.ResponseWriter, code int, errType, msg string) {
 			"message": msg,
 		},
 	})
-}
-
-func envOr(key, fallback string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
-	}
-	return fallback
 }

@@ -96,15 +96,18 @@ func (r *RolloutBridge) RolloutTreeFix(ctx context.Context, tree *bugbash.BugBas
 	var updated []ServiceRolloutStatus
 	for _, svc := range implicated {
 		svcStart := time.Now()
-		lang, cacheDesc := serviceBuildCacheSpec(svc)
+		lang := storefront.ServiceLanguage(svc)
+		cacheDesc := storefront.ServiceCacheMount(svc)
 
 		if r.cfg.Storefront != nil {
-			repoDir := r.cfg.Storefront.GitManager().RepoDir()
-			if storefront.IsServicePatchedForIncident(repoDir, incidentID, svc) {
-				r.cfg.Storefront.MarkServiceHealed(incidentID, svc)
-			} else {
-				r.cfg.Storefront.MarkServiceHealed(incidentID, svc)
+			repoDir := ""
+			if r.cfg.Storefront.GitManager() != nil {
+				repoDir = r.cfg.Storefront.GitManager().RepoDir()
 			}
+			if repoDir != "" && !storefront.IsServicePatchedForIncident(repoDir, incidentID, svc) {
+				return nil, fmt.Errorf("service %s is not patched for incident %s in git workspace", svc, incidentID)
+			}
+			r.cfg.Storefront.MarkServiceHealed(incidentID, svc)
 		}
 
 		svcMs := time.Since(svcStart).Milliseconds()
@@ -238,21 +241,4 @@ func cloneRolloutReport(in RolloutReport) RolloutReport {
 	out.UpdatedServices = append([]ServiceRolloutStatus(nil), in.UpdatedServices...)
 	out.SkippedServices = append([]string(nil), in.SkippedServices...)
 	return out
-}
-
-func serviceBuildCacheSpec(service string) (string, string) {
-	switch service {
-	case storefront.ServiceStorefrontWeb:
-		return "TypeScript / Node.js", "/cache/node_modules (pre-warmed tsx/esbuild bundle)"
-	case storefront.ServiceCheckout:
-		return "Go", "/cache/gocache & /cache/gomodcache (incremental go build)"
-	case storefront.ServiceShipping:
-		return "Go", "/cache/gocache & /cache/gomodcache (incremental go build)"
-	case storefront.ServicePricing:
-		return "Python / FastAPI", "/cache/venv (pre-warmed wheel & bytecode cache)"
-	case storefront.ServiceInventory:
-		return "Rust / Axum", "/cache/cargo-target (pre-warmed crate artifacts)"
-	default:
-		return "Polyglot", "/cache/prewarmed"
-	}
 }

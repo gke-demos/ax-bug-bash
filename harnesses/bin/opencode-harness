@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OpenCode CLI coding harness wrapper talking to OpenAI-compatible Model Gateway (/s/{task_name}/v1/chat/completions)."""
+"""OpenCode CLI coding harness talking to OpenAI-compatible Model Gateway (/s/{task_name}/v1/chat/completions)."""
 
 import json
 import os
