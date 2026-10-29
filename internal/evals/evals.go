@@ -328,10 +328,13 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 		"hack/run-local.sh",
 		"hack/record-stage-walkthrough.sh",
 		"hack/record-terminal-demo.py",
+		"hack/stage-warmup.sh",
 		"Makefile",
 		"README.md",
+		"docs/architecture/three-layer-substrate-env-ax.md",
 		"docs/blog/self-spawning-bug-bash-tree-on-google-ax.md",
 		"docs/tutorial/build-a-self-spawning-bug-bash-tree.md",
+		"docs/stage-runbook.md",
 		"docs/upstream/google-ax-v060-patches.md",
 		"docs/showcase/slides.html",
 		"docs/showcase/architecture-report.md",
@@ -353,7 +356,7 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 		text := string(raw)
 		contentsByFile[rel] = text
 
-		if strings.HasPrefix(rel, "docs/blog/") || strings.HasPrefix(rel, "docs/tutorial/") || strings.HasPrefix(rel, "docs/upstream/") || rel == "docs/showcase/architecture-report.md" {
+		if strings.HasPrefix(rel, "docs/architecture/") || strings.HasPrefix(rel, "docs/blog/") || strings.HasPrefix(rel, "docs/tutorial/") || strings.HasPrefix(rel, "docs/upstream/") || rel == "docs/stage-runbook.md" || rel == "docs/showcase/architecture-report.md" {
 			report.Violations = append(report.Violations, VerifyMarkdownHumanizerAndHygiene(rel, text)...)
 			continue
 		}
@@ -483,7 +486,47 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 		"images:",
 		"deploy:",
 		"verify-manifests:",
+		"stage-ready:",
 		"record-demo:",
+	})
+
+	requireSnippets("hack/stage-warmup.sh", []string{
+		"/tmp/ax-bug-bash-stage-pf.pids",
+		"--stop",
+		"baseline-v1",
+		"/api/workers",
+		"/api/about/catalog",
+		"STAGE WARMUP GATE PASSED",
+	})
+
+	requireSnippets("docs/architecture/three-layer-substrate-env-ax.md", []string{
+		"Why the Agent Execution Stack Splits into Three Layers",
+		"Layer 1 (`agent-substrate/substrate`)",
+		"Layer 2 (`agent-substrate/env`)",
+		"Layer 3 (`google/ax`)",
+		"The Layer Selection Matrix",
+		"High-Frequency Stateless Code Interpreter",
+		"Custom Non-HTTP Guest Daemon",
+		"Interactive Browser IDE",
+		"External Workflow Engine Step Runner",
+		"Single-Repo Autonomous Coding Task",
+		"Recursive Multi-Service Incident Response",
+		"Multi-Harness Comparative Evaluation Benchmark",
+		"Gemini Enterprise Agent Platform",
+		"compute obtainability",
+	})
+
+	requireSnippets("docs/stage-runbook.md", []string{
+		"make stage-ready",
+		"Projector Light Mode",
+		"Cue 1",
+		"Cue 2",
+		"Cue 3",
+		"Cue 4",
+		"/workers",
+		"/about",
+		"ADR-0014",
+		"Gemini Enterprise Agent Platform",
 	})
 
 	requireSnippets("README.md", []string{
@@ -500,8 +543,10 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 		"gemini-3.5-flash",
 		"Gemini Enterprise Agent Platform",
 		"Agent Substrate",
+		"docs/architecture/three-layer-substrate-env-ax.md",
 		"docs/blog/self-spawning-bug-bash-tree-on-google-ax.md",
 		"docs/tutorial/build-a-self-spawning-bug-bash-tree.md",
+		"docs/stage-runbook.md",
 		"docs/upstream/google-ax-v060-patches.md",
 		"docs/showcase/slides.html",
 		"docs/showcase/architecture-report.md",

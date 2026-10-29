@@ -102,10 +102,12 @@ gemini-3.8-flash  →  gemini-3.7-flash  →  gemini-3.6-flash  →  gemini-3.5-
 
 ---
 
-## Documentation, Blog Post & Live GKE Stage Walkthrough (`ADR-0012` & `ADR-0013`)
+## Documentation, Blog Post & Live GKE Stage Walkthrough (`ADR-0012` through `ADR-0014`)
 
+- **Three-Layer Architecture Guide (`BOM-19`)**: [`docs/architecture/three-layer-substrate-env-ax.md`](docs/architecture/three-layer-substrate-env-ax.md) specifies the CRD, gRPC, and container-boundary contracts across Layer 1 (`agent-substrate/substrate`), Layer 2 (`agent-substrate/env`), and Layer 3 (`google/ax`), paired with a 7-workload **Layer Selection Matrix** and cross-doc mapping for `ate.dev`, `google/ax/docs/`, and Google Cloud Docs.
 - **Flagship Technical Blog Post (`BOM-20`)**: [`docs/blog/self-spawning-bug-bash-tree-on-google-ax.md`](docs/blog/self-spawning-bug-bash-tree-on-google-ax.md) walks through the 7-section narrative, the **Three-Layer Substrate Stack**, multi-harness Red-Green TDD against the zero-secret **Model Gateway**, `< 3s` selective Git hot-reload, and measured GKE latency benchmarks (`80ms` clone, `4ms` `go test`, `42.6ms` `SNAPSHOT_FIDELITY_VOLUMES` checkpoint, `61ms` slot reclamation).
 - **Five-Lab Hands-On Developer Tutorial**: [`docs/tutorial/build-a-self-spawning-bug-bash-tree.md`](docs/tutorial/build-a-self-spawning-bug-bash-tree.md) provides a step-by-step developer walkthrough from local `SIMULATED` mode (`make run-local` and `make eval`) through authoring a Go **Custom Runner** (`runner.Run`, `OnCommandExit`, `SuspendTask`), configuring the zero-secret **Model Gateway**, deploying to GKE (`make deploy`), and verifying the live `4x4` chaos soak (`make eval-live-gke`).
+- **Live Stage Presenter Runbook & Warmup Gate (`make stage-ready`)**: [`docs/stage-runbook.md`](docs/stage-runbook.md) and [`hack/stage-warmup.sh`](hack/stage-warmup.sh) provide a 5-to-6-minute presenter cue script and a one-command **Stage Warmup Gate** (`make stage-ready`) that verifies all GKE pods and `4/4 Ready` `ateworker-gvisor` slots, idempotently establishes local port-forwards on `:3000`, `:3001`, and `:3002`, resets the storefront to `baseline-v1`, drains alerts, and verifies all 14 ADRs on `/api/about/catalog`.
 - **Upstream `google/ax` Compatibility Overlay Guide**: [`docs/upstream/google-ax-v060-patches.md`](docs/upstream/google-ax-v060-patches.md) provides three standalone upstream PR blueprints (`Issues #482, #511, #518`) with root causes, minimal unified diffs, and live-GKE verification metrics.
 - **Interactive Architecture Deck & Report**: [`docs/showcase/slides.html`](docs/showcase/slides.html) and [`docs/showcase/architecture-report.md`](docs/showcase/architecture-report.md) provide the 16:9 presentation deck and benchmark readout.
 
