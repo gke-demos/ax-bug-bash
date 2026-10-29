@@ -80,15 +80,11 @@ func TestAboutArchitectureCatalogEndpointAndGeometry(t *testing.T) {
 		t.Fatalf("ValidateCatalogGeometry failed on default catalog: %v", err)
 	}
 
-	// Verify stage-safe scrubbing: zero personal cluster, project, node, or bucket identifiers
+	// Verify stage-safe scrubbing: zero bucket URIs, GKE node/context strings, or retired branding
 	rawJSON, _ := json.Marshal(cat)
 	rawStr := strings.ToLower(string(rawJSON))
 	for _, forbidden := range []string{
-		"ate-cluster",
-		"mofilabs",
-		"598464211339",
-		"gke-ate-cluster",
-		"substrate-poc",
+		"gke_",
 		"gs://",
 		"fluid compute",
 		"vertex" + " ai",
@@ -102,8 +98,8 @@ func TestAboutArchitectureCatalogEndpointAndGeometry(t *testing.T) {
 	if cat.StatusStrip.ActiveExecutionMode == "" {
 		t.Errorf("StatusStrip.ActiveExecutionMode is empty")
 	}
-	if cat.StatusStrip.StorefrontBaselineTag == "" {
-		t.Errorf("StatusStrip.StorefrontBaselineTag is empty")
+	if cat.StatusStrip.StorefrontBaselineTag != "baseline-v1" {
+		t.Errorf("StatusStrip.StorefrontBaselineTag = %q, want baseline-v1", cat.StatusStrip.StorefrontBaselineTag)
 	}
 	for _, adr := range cat.ADRs {
 		if adr.ID == "" || adr.Title == "" || adr.Status == "" || adr.Summary == "" {
@@ -133,7 +129,7 @@ func TestVerifyArchitectureCatalogDrift(t *testing.T) {
 		LiveWorkerSlots:       4,
 		WarmIdleSlots:         4,
 		GatewaySessionsCount:  0,
-		StorefrontBaselineTag: "baseline-healthy",
+		StorefrontBaselineTag: "baseline-v1",
 	})
 	overlappingCat := cat
 	overlappingCat.Nodes = append([]observer.TopologyNode(nil), cat.Nodes...)
@@ -160,10 +156,13 @@ func TestVerifyArchitectureCatalogDrift(t *testing.T) {
 		t.Errorf("ValidateCatalogGeometry expected error for dangling edge node reference, got nil")
 	}
 
-	// Test StageSafeScrub removes sensitive strings
-	scrubbed := observer.ScrubStageSafeString("cluster gke_mofilabs_us-central1-a_ate-cluster project 598464211339 bucket gs://substrate-poc-snapshots")
-	if strings.Contains(scrubbed, "mofilabs") || strings.Contains(scrubbed, "ate-cluster") || strings.Contains(scrubbed, "598464211339") || strings.Contains(scrubbed, "gs://") {
-		t.Errorf("ScrubStageSafeString failed to scrub sensitive tokens: %q", scrubbed)
+	// Test StageSafeScrub removes sensitive strings and dynamic env vars
+	t.Setenv("PROJECT_ID", "custom-stage-project")
+	scrubbed := observer.ScrubStageSafeString("cluster gke_demo_us-central1-a_cluster node gke-demo-default-pool-1234 project custom-stage-project number 123456789012 bucket gs://demo-snapshots/ax")
+	for _, sensitive := range []string{"gke_demo", "gke-demo-default-pool", "custom-stage-project", "123456789012", "gs://"} {
+		if strings.Contains(scrubbed, sensitive) {
+			t.Errorf("ScrubStageSafeString failed to scrub sensitive token %q: %q", sensitive, scrubbed)
+		}
 	}
 
 	// Test partial repo missing a single harness binary fails closed

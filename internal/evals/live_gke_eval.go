@@ -36,6 +36,27 @@ var LiveChaosSoakDiagonal = []LiveChaosSoakPair{
 	{IncidentID: storefront.IncidentLithiumHazmatWeightTier, HarnessMode: "multi"},
 }
 
+// LiveChaosSoakPairs returns either the 4-pair diagonal (default) or the full 16-trajectory 4x4 matrix when fullMatrix is true.
+func LiveChaosSoakPairs(fullMatrix bool) []LiveChaosSoakPair {
+	if !fullMatrix {
+		return append([]LiveChaosSoakPair(nil), LiveChaosSoakDiagonal...)
+	}
+	incidents := []string{
+		storefront.IncidentStackedPromoNegativeSubtotal,
+		storefront.IncidentFlashSaleBundleUnderflow,
+		storefront.IncidentZeroDecimalJPYRounding,
+		storefront.IncidentLithiumHazmatWeightTier,
+	}
+	harnesses := []string{"antigravity", "opencode", "pi", "multi"}
+	pairs := make([]LiveChaosSoakPair, 0, len(incidents)*len(harnesses))
+	for _, inc := range incidents {
+		for _, h := range harnesses {
+			pairs = append(pairs, LiveChaosSoakPair{IncidentID: inc, HarnessMode: h})
+		}
+	}
+	return pairs
+}
+
 // LiveGKEEvalConfig configures the live GKE 4x4 chaos soak and Google Cloud dual-export verifier.
 type LiveGKEEvalConfig struct {
 	ObserverURL        string
@@ -48,6 +69,7 @@ type LiveGKEEvalConfig struct {
 	CloudLoggingURL    string
 	CloudMonitoringURL string
 	ReportPath         string
+	FullMatrix         bool
 	TrajectoryTimeout  time.Duration
 	AlertDrainTimeout  time.Duration
 	DualExportTimeout  time.Duration
@@ -134,15 +156,18 @@ func RunLiveGKEChaosSoak(ctx context.Context, cfg LiveGKEEvalConfig) (LiveGKESoa
 	defer cleanupTunnels()
 	cfg = resolvedCfg
 
+	fullMatrix := cfg.FullMatrix || strings.TrimSpace(os.Getenv("AX_LIVE_FULL_MATRIX")) == "1"
+	pairs := LiveChaosSoakPairs(fullMatrix)
+
 	report := LiveGKESoakReport{
 		GeneratedAt:       time.Now().UTC(),
 		ExecutionMode:     "LIVE_GKE",
 		MaxConcurrency:    1,
-		TotalTrajectories: len(LiveChaosSoakDiagonal),
+		TotalTrajectories: len(pairs),
 		ReportPath:        cfg.ReportPath,
 	}
 
-	for _, pair := range LiveChaosSoakDiagonal {
+	for _, pair := range pairs {
 		tr := runSingleLiveTrajectory(ctx, cfg, pair)
 		tr = scrubTrajectoryReport(tr)
 		report.Trajectories = append(report.Trajectories, tr)
@@ -291,6 +316,12 @@ func runSingleLiveTrajectory(ctx context.Context, cfg LiveGKEEvalConfig, pair Li
 		tr.FailureReasons = append(tr.FailureReasons, "no Bug Bash Tree execution observed for incident "+sc.ID)
 	} else {
 		gradeLiveObserverTree(&tr, sc, pair.HarnessMode, activeTree)
+		if tr.OnCommandExitAndSuspendReclaimed {
+			if slotsReclaimed, slotErr := waitForZeroActiveWorkerSlots(ctx, cfg.HTTPClient, obsBase, 15*time.Second, cfg.PollInterval); !slotsReclaimed {
+				tr.OnCommandExitAndSuspendReclaimed = false
+				tr.FailureReasons = append(tr.FailureReasons, fmt.Sprintf("worker pool slots not reclaimed after SuspendTask: %v", slotErr))
+			}
+		}
 	}
 
 	// Verify post-rollout checkout returns HTTP 200 OK (poll briefly if selective hot-reload is finalizing)
@@ -366,6 +397,10 @@ func gradeLiveObserverTree(tr *LiveGKETrajectoryReport, sc storefront.IncidentSc
 	tr.SpawnedChildCount = len(tree.ChildTasks)
 	tr.RolloutDurationMs = tree.RolloutDurationMs
 	tr.SourceProvenance = strings.ToUpper(strings.TrimSpace(tree.SourceProvenance))
+
+	if tree.ExecutionMode != "" && !strings.EqualFold(tree.ExecutionMode, "LIVE_GKE") {
+		tr.FailureReasons = append(tr.FailureReasons, fmt.Sprintf("tree ExecutionMode = %q, want LIVE_GKE", tree.ExecutionMode))
+	}
 
 	childBySvc := make(map[string]observer.ObserverChildTaskView, len(tree.ChildTasks))
 	for _, ch := range tree.ChildTasks {
@@ -474,11 +509,15 @@ func VerifyGCPDualExport(ctx context.Context, cfg LiveGKEEvalConfig) (GCPDualExp
 	}
 
 	token := strings.TrimSpace(cfg.AccessToken)
+	usingClusterSAToken := false
 	if token == "" {
 		token = strings.TrimSpace(os.Getenv("GCP_ACCESS_TOKEN"))
 	}
 	if token == "" && cfg.CloudLoggingURL == "" && cfg.CloudMonitoringURL == "" {
 		token = resolveGKEClusterMetadataToken(ctx)
+		if token != "" {
+			usingClusterSAToken = true
+		}
 	}
 	if token == "" {
 		out, err := exec.CommandContext(ctx, "gcloud", "auth", "print-access-token").Output()
@@ -501,8 +540,10 @@ func VerifyGCPDualExport(ctx context.Context, cfg LiveGKEEvalConfig) (GCPDualExp
 	}
 
 	headers := map[string]string{
-		"Authorization":       "Bearer " + token,
-		"X-Goog-User-Project": projectID,
+		"Authorization": "Bearer " + token,
+	}
+	if !usingClusterSAToken {
+		headers["X-Goog-User-Project"] = projectID
 	}
 
 	deadline := time.Now().Add(timeout)
@@ -605,6 +646,31 @@ func resolveGKEClusterMetadataToken(ctx context.Context) string {
 		return ""
 	}
 	return strings.TrimSpace(parsed.AccessToken)
+}
+
+func waitForZeroActiveWorkerSlots(ctx context.Context, client *http.Client, obsBase string, timeout, pollInterval time.Duration) (bool, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		status, body, err := doJSONRequest(ctx, client, http.MethodGet, obsBase+"/api/workers", nil)
+		if err == nil && status == http.StatusOK {
+			var parsed observer.WorkersResponse
+			if jsonErr := json.Unmarshal(body, &parsed); jsonErr == nil {
+				if parsed.AllocatedSlots == 0 {
+					return true, nil
+				}
+			}
+		} else if status == http.StatusNotFound {
+			return true, nil
+		}
+		if time.Now().After(deadline) {
+			return false, fmt.Errorf("AllocatedSlots > 0 after %s", timeout)
+		}
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-time.After(pollInterval):
+		}
+	}
 }
 
 func waitForPrometheusAlertsDrained(ctx context.Context, client *http.Client, promBase string, timeout, pollInterval time.Duration) (bool, error) {

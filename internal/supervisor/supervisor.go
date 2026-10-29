@@ -433,7 +433,8 @@ func (s *Supervisor) supportsNodeStripTypes(nodeBin string) bool {
 func (s *Supervisor) childEnvironment(commitSHA string, port int) []string {
 	env := axhttputil.EnsureGoBinOnPath(os.Environ())
 	curPath := os.Getenv("PATH")
-	extraPath := "/usr/local/cargo/bin:" + filepath.Join(os.Getenv("HOME"), ".cargo", "bin") + ":/usr/local/google/home/mofi/.local/go/bin:/usr/local/go/bin:" + curPath
+	homeDir := os.Getenv("HOME")
+	extraPath := "/usr/local/cargo/bin:" + filepath.Join(homeDir, ".cargo", "bin") + ":" + filepath.Join(homeDir, ".local", "go", "bin") + ":/usr/local/go/bin:" + curPath
 	env = append(env, s.cfg.ChildEnv...)
 	env = append(env,
 		"PATH="+extraPath,

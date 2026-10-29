@@ -198,11 +198,9 @@ func ExpectedADRFilenames() []string {
 var stageUnsafePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)gs://[a-z0-9._/-]+`),
 	regexp.MustCompile(`(?i)gke_[a-z0-9_-]+`),
-	regexp.MustCompile(`(?i)gke-ate-cluster[a-z0-9_-]*`),
-	regexp.MustCompile(`(?i)\bate-cluster\b`),
-	regexp.MustCompile(`(?i)\bmofilabs\b`),
-	regexp.MustCompile(`\b598464211339\b`),
-	regexp.MustCompile(`(?i)substrate-poc[a-z0-9_-]*`),
+	regexp.MustCompile(`(?i)gke-[a-z0-9-]+-(?:pool|node|default)[a-z0-9_-]*`),
+	regexp.MustCompile(`\b\d{12}\b`),
+	regexp.MustCompile(`(?i)projects/[a-z][a-z0-9-]{4,29}`),
 }
 
 // ScrubStageSafeString removes any cluster, project, node hostname, or bucket URI tokens from stage-facing strings.
@@ -210,6 +208,14 @@ func ScrubStageSafeString(s string) string {
 	out := s
 	for _, re := range stageUnsafePatterns {
 		out = re.ReplaceAllString(out, "[redacted-stage-safe]")
+	}
+	for _, envKey := range []string{"PROJECT_ID", "GOOGLE_CLOUD_PROJECT", "KUBE_CONTEXT", "CLUSTER_NAME", "AX_SNAPSHOTS_BUCKET"} {
+		if val := strings.TrimSpace(os.Getenv(envKey)); len(val) >= 3 {
+			re, err := regexp.Compile(`(?i)` + regexp.QuoteMeta(val))
+			if err == nil {
+				out = re.ReplaceAllString(out, "[redacted-stage-safe]")
+			}
+		}
 	}
 	return out
 }
@@ -232,7 +238,7 @@ func BuildArchitectureTopologyCatalog(rt CatalogRuntimeTelemetry) ArchitectureTo
 		rt.SourceProvenance = string(gateway.ProvenanceFixture)
 	}
 	if strings.TrimSpace(rt.StorefrontBaselineTag) == "" {
-		rt.StorefrontBaselineTag = "baseline-healthy"
+		rt.StorefrontBaselineTag = storefront.BaselineGitTag
 	}
 	rt.ActiveExecutionMode = ScrubStageSafeString(rt.ActiveExecutionMode)
 	rt.StorefrontBaselineTag = ScrubStageSafeString(rt.StorefrontBaselineTag)
@@ -384,7 +390,7 @@ func BuildArchitectureTopologyCatalog(rt CatalogRuntimeTelemetry) ArchitectureTo
 			Description: "In-cluster Git origin and selective hot-reload coordinator restarting only modified microservices in < 10s.",
 			KeyCapabilities: []string{
 				"Serves /git/storefront.git to root and child sandboxes",
-				"Diffs baseline-healthy..HEAD to reload only changed services",
+				"Diffs baseline-v1..HEAD to reload only changed services",
 				"Leaves unaffected services running with zero connection drops",
 			},
 			CodePath: "internal/storefront/git_repo.go",
@@ -655,7 +661,7 @@ func BuildArchitectureTopologyCatalog(rt CatalogRuntimeTelemetry) ArchitectureTo
 			Port:           3001,
 			SupervisorPort: 13001,
 			SourceFile:     "services/storefront-web/src/server.ts",
-			TestFile:       "services/storefront-web/test/server.test.mjs",
+			TestFile:       "services/storefront-web/test/storefront.test.mjs",
 			UnitTestCmd:    "npm test",
 			RoleSummary:    "Shopper HTTP edge gateway normalizing cart items, coupon arrays, and currency headers.",
 		},
@@ -757,7 +763,7 @@ func BuildArchitectureTopologyCatalog(rt CatalogRuntimeTelemetry) ArchitectureTo
 			DisplayName:     "Antigravity CLI",
 			BinaryPath:      "harnesses/bin/antigravity",
 			ConfigPath:      "harnesses/config/antigravity.json",
-			CommandTemplate: "antigravity --headless --endpoint $MODEL_GATEWAY_URL/v1beta --model $MODEL --workspace /workspace/$SERVICE",
+			CommandTemplate: "antigravity --print --endpoint $MODEL_GATEWAY_URL/v1beta --model $MODEL --workspace /workspace/$SERVICE",
 			WireProtocol:    "google-genai",
 			AuthHeader:      "x-goog-api-key: agw_task_<ephemeral>",
 			StrengthSummary: "Native Google GenAI structured tool-use harness optimized for Gemini Flash multi-file reasoning.",
@@ -767,7 +773,7 @@ func BuildArchitectureTopologyCatalog(rt CatalogRuntimeTelemetry) ArchitectureTo
 			DisplayName:     "OpenCode CLI",
 			BinaryPath:      "harnesses/bin/opencode-harness",
 			ConfigPath:      "harnesses/config/opencode.json",
-			CommandTemplate: "opencode-harness --non-interactive --api-base $MODEL_GATEWAY_URL/v1 --model $MODEL --cwd /workspace/$SERVICE",
+			CommandTemplate: "opencode-harness run --api-base $MODEL_GATEWAY_URL/v1 --model $MODEL --cwd /workspace/$SERVICE",
 			WireProtocol:    "openai-compat",
 			AuthHeader:      "Authorization: Bearer agw_task_<ephemeral>",
 			StrengthSummary: "OpenAI-compatible autonomous coding harness with fast unified diff synthesis and test-runner hooks.",
@@ -777,7 +783,7 @@ func BuildArchitectureTopologyCatalog(rt CatalogRuntimeTelemetry) ArchitectureTo
 			DisplayName:     "Pi Coding Agent CLI",
 			BinaryPath:      "harnesses/bin/pi-harness",
 			ConfigPath:      "harnesses/config/pi.json",
-			CommandTemplate: "pi-harness --yes --base-url $MODEL_GATEWAY_URL/v1 --model $MODEL --dir /workspace/$SERVICE",
+			CommandTemplate: "pi-harness --print --no-session --base-url $MODEL_GATEWAY_URL/v1 --model $MODEL --dir /workspace/$SERVICE",
 			WireProtocol:    "openai-compat",
 			AuthHeader:      "Authorization: Bearer agw_task_<ephemeral>",
 			StrengthSummary: "Minimalist surgical patch agent focused on minimal-diff boundary fixes and rapid unit test verification.",
@@ -790,7 +796,7 @@ func BuildArchitectureTopologyCatalog(rt CatalogRuntimeTelemetry) ArchitectureTo
 		latency int
 	}{
 		{
-			role:    "Primary Frontier Flash Tier — default model for Root Triage and Child Fixer tasks",
+			role:    "Primary Frontier Flash Tier — default model for Root Task and Child Tasks",
 			trigger: "Initial attempt (0ms backoff)",
 			latency: 420,
 		},
@@ -858,7 +864,7 @@ func BuildArchitectureTopologyCatalog(rt CatalogRuntimeTelemetry) ArchitectureTo
 			ID:         "stage-2-root-triage-creation",
 			Title:      "2. Root Task Creation on ax-server",
 			Subtitle:   "ax-observer dispatches CreateTask(root-bug-bash) -> OpenFGA owner tuple -> Slot 01 leased",
-			Summary:    "ax-observer calls google/ax gRPC CreateTask to spawn the Root Incident Triage Agent on warm sandbox slot ateworker-gvisor-01. The Root Agent analyzes Loki stack traces and pinpoints the exact implicated services while marking healthy services unaffected.",
+			Summary:    "ax-observer calls google/ax gRPC CreateTask to spawn the Root Task on warm sandbox slot ateworker-gvisor-01. The Root Task analyzes Loki stack traces and pinpoints the exact implicated services while marking healthy services unaffected.",
 			HighlightedNodes: []string{
 				"ax-observer",
 				"ax-server-openfga",
@@ -871,7 +877,7 @@ func BuildArchitectureTopologyCatalog(rt CatalogRuntimeTelemetry) ArchitectureTo
 			RootTaskPhase:  "Running",
 			ChildTaskPhase: "Pending",
 			SlotStates: []LifecycleSlotState{
-				{SlotID: "ateworker-gvisor-01", State: "ACTIVE_SANDBOX", TaskRole: "Root Incident Triage Agent", Harness: "antigravity"},
+				{SlotID: "ateworker-gvisor-01", State: "ACTIVE_SANDBOX", TaskRole: "Root Task (Incident Triage)", Harness: "antigravity"},
 				{SlotID: "ateworker-gvisor-02", State: "WARM_IDLE", TaskRole: "Idle Warm Sandbox", Harness: "ready"},
 				{SlotID: "ateworker-gvisor-03", State: "WARM_IDLE", TaskRole: "Idle Warm Sandbox", Harness: "ready"},
 				{SlotID: "ateworker-gvisor-04", State: "WARM_IDLE", TaskRole: "Idle Warm Sandbox", Harness: "ready"},
@@ -882,9 +888,9 @@ func BuildArchitectureTopologyCatalog(rt CatalogRuntimeTelemetry) ArchitectureTo
 		{
 			StepNumber: 3,
 			ID:         "stage-3-parallel-child-fanout",
-			Title:      "3. Parallel Child Fixer Fan-Out",
+			Title:      "3. Parallel Child Tasks Fan-Out",
 			Subtitle:   "Root Task spawns 1 isolated Child Task per implicated service with parent_task lineage",
-			Summary:    "The Root Triage Agent calls ax-server from inside its sandbox to fan out parallel Child Fixer Tasks—one per implicated microservice—assigning Antigravity, OpenCode, or Pi CLI harnesses onto warm gVisor slots 02 and 03.",
+			Summary:    "The Root Task calls ax-server from inside its sandbox to fan out parallel Child Tasks—one per implicated microservice—assigning Antigravity, OpenCode, or Pi CLI harnesses onto warm gVisor slots 02 and 03.",
 			HighlightedNodes: []string{
 				"ax-server-openfga",
 				"ateworker-gvisor-pool",
@@ -898,9 +904,9 @@ func BuildArchitectureTopologyCatalog(rt CatalogRuntimeTelemetry) ArchitectureTo
 			RootTaskPhase:  "WaitingForChildren",
 			ChildTaskPhase: "Running",
 			SlotStates: []LifecycleSlotState{
-				{SlotID: "ateworker-gvisor-01", State: "ACTIVE_SANDBOX", TaskRole: "Root Triage (Waiting)", Harness: "antigravity"},
-				{SlotID: "ateworker-gvisor-02", State: "ACTIVE_SANDBOX", TaskRole: "Child Fixer: pricing-service", Harness: "antigravity"},
-				{SlotID: "ateworker-gvisor-03", State: "ACTIVE_SANDBOX", TaskRole: "Child Fixer: shipping-service", Harness: "opencode"},
+				{SlotID: "ateworker-gvisor-01", State: "ACTIVE_SANDBOX", TaskRole: "Root Task (Waiting)", Harness: "antigravity"},
+				{SlotID: "ateworker-gvisor-02", State: "ACTIVE_SANDBOX", TaskRole: "Child Task: pricing-service", Harness: "antigravity"},
+				{SlotID: "ateworker-gvisor-03", State: "ACTIVE_SANDBOX", TaskRole: "Child Task: shipping-service", Harness: "opencode"},
 				{SlotID: "ateworker-gvisor-04", State: "WARM_IDLE", TaskRole: "Idle Warm Sandbox", Harness: "ready"},
 			},
 			ProtocolLabel:          "gRPC ax.v1alpha1.TaskService/CreateTask (child-fixer fan-out)",
@@ -911,7 +917,7 @@ func BuildArchitectureTopologyCatalog(rt CatalogRuntimeTelemetry) ArchitectureTo
 			ID:         "stage-4-sandbox-red-green-tdd",
 			Title:      "4. Sandbox Red-Green-Verify TDD Loop",
 			Subtitle:   "Write failing regression test (Red) -> synthesize minimal fix via Model Gateway -> pass suite (Green)",
-			Summary:    "Inside each airgapped gVisor sandbox, the Child Fixer writes a unit test reproducing the exact failing cart payload, runs the native language test runner to confirm a Red failure, calls model-gateway using its ephemeral TaskSessionToken to synthesize the fix, and re-runs the full test suite to prove Green.",
+			Summary:    "Inside each airgapped gVisor sandbox, the Child Task writes a unit test reproducing the exact failing cart payload, runs the native language test runner to confirm a Red failure, calls model-gateway using its ephemeral TaskSessionToken to synthesize the fix, and re-runs the full test suite to prove Green.",
 			HighlightedNodes: []string{
 				"ateworker-gvisor-pool",
 				"model-gateway",
@@ -924,7 +930,7 @@ func BuildArchitectureTopologyCatalog(rt CatalogRuntimeTelemetry) ArchitectureTo
 			RootTaskPhase:  "WaitingForChildren",
 			ChildTaskPhase: "Running (Red -> Green TDD)",
 			SlotStates: []LifecycleSlotState{
-				{SlotID: "ateworker-gvisor-01", State: "ACTIVE_SANDBOX", TaskRole: "Root Triage (Verifying)", Harness: "antigravity"},
+				{SlotID: "ateworker-gvisor-01", State: "ACTIVE_SANDBOX", TaskRole: "Root Task (Verifying)", Harness: "antigravity"},
 				{SlotID: "ateworker-gvisor-02", State: "ACTIVE_SANDBOX", TaskRole: "Red -> Green: pricing.py", Harness: "antigravity"},
 				{SlotID: "ateworker-gvisor-03", State: "ACTIVE_SANDBOX", TaskRole: "Red -> Green: shipping.go", Harness: "opencode"},
 				{SlotID: "ateworker-gvisor-04", State: "WARM_IDLE", TaskRole: "Idle Warm Sandbox", Harness: "ready"},
@@ -937,7 +943,7 @@ func BuildArchitectureTopologyCatalog(rt CatalogRuntimeTelemetry) ArchitectureTo
 			ID:         "stage-5-root-merge-hot-reload",
 			Title:      "5. Root Verification Gate & Selective Hot-Reload",
 			Subtitle:   "Root merges verified child branches -> pushes to storefront-git-origin -> reloads only changed services (< 10s)",
-			Summary:    "Once all Child Fixers pass Green verification, the Root Agent fetches and merges their branches (--no-ff) into main, pushes to storefront-git-origin, and triggers selective hot-reload. Only pricing-service and shipping-service restart in < 10s; storefront-web, checkout-service, and inventory-service stay untouched.",
+			Summary:    "Once all Child Tasks pass Green verification, the Root Task fetches and merges their branches (--no-ff) into main, pushes to storefront-git-origin, and triggers selective hot-reload. Only pricing-service and shipping-service restart in < 10s; storefront-web, checkout-service, and inventory-service stay untouched.",
 			HighlightedNodes: []string{
 				"ateworker-gvisor-pool",
 				"storefront-git-origin",
@@ -1055,13 +1061,13 @@ func BuildArchitectureTopologyCatalog(rt CatalogRuntimeTelemetry) ArchitectureTo
 			ID:       "ADR-0004",
 			Number:   4,
 			Filename: expectedADRFileList[3],
-			Title:    "Telemetry-Driven Root Triage and Red-Green TDD Child Task Lifecycle",
+			Title:    "Telemetry-Driven Root Task Triage and Red-Green TDD Child Task Lifecycle",
 			Status:   "Accepted",
 			Category: "Agent Orchestration",
-			Summary:  "Defines the two-level self-spawning task tree on google/ax: a Root Incident Triage Agent that queries Loki/Prometheus and spawns parallel Child Fixer Tasks that execute a strict Red-Green-Verify TDD loop before auto-suspending.",
+			Summary:  "Defines the two-level self-spawning task tree on google/ax: a Root Task that queries Loki/Prometheus and spawns parallel Child Tasks that execute a strict Red-Green-Verify TDD loop before auto-suspending.",
 			KeyDecisions: []string{
-				"Root Triage Agent correlates Alertmanager labels with Loki stack traces",
-				"1 parallel Child Fixer Task per implicated service with parent_task lineage",
+				"Root Task correlates Alertmanager labels with Loki stack traces",
+				"1 parallel Child Task per implicated service with parent_task lineage",
 				"Mandatory Red reproducer test -> minimal code fix -> Green test suite -> SuspendTask",
 			},
 			RelatedNodes:    []string{"ax-observer", "ax-server-openfga", "ateworker-gvisor-pool"},
@@ -1142,7 +1148,7 @@ func BuildArchitectureTopologyCatalog(rt CatalogRuntimeTelemetry) ArchitectureTo
 			KeyDecisions: []string{
 				"Per-service process supervisors on loopback ports 13001 and 18081..18084",
 				"Git Smart-HTTP server at /git/storefront.git for sandbox clone/push",
-				"Selective git diff baseline-healthy..HEAD reload in < 10s",
+				"Selective git diff baseline-v1..HEAD reload in < 10s",
 			},
 			RelatedNodes:    []string{"storefront-git-origin", "storefront-web", "checkout-service", "pricing-service", "inventory-service", "shipping-service"},
 			RuntimeCounters: commonCounters(map[string]string{"hot_reload_sla": "< 10s selective"}),
@@ -1181,6 +1187,8 @@ func BuildArchitectureTopologyCatalog(rt CatalogRuntimeTelemetry) ArchitectureTo
 		},
 	}
 
+	adrs = enrichADRsFromDisk(adrs)
+
 	return ArchitectureTopologyCatalog{
 		ViewBox:         TopologyViewBox{Width: 1200, Height: 620},
 		StatusStrip:     rt,
@@ -1194,6 +1202,53 @@ func BuildArchitectureTopologyCatalog(rt CatalogRuntimeTelemetry) ArchitectureTo
 		LifecycleStages: lifecycleStages,
 		ADRs:            adrs,
 	}
+}
+
+func enrichADRsFromDisk(adrs []CatalogADRCard) []CatalogADRCard {
+	candidates := []string{
+		filepath.Join("docs", "adr"),
+		filepath.Join("..", "..", "docs", "adr"),
+		filepath.Join("/workspace", "docs", "adr"),
+	}
+	var adrDir string
+	for _, c := range candidates {
+		if st, err := os.Stat(c); err == nil && st.IsDir() {
+			adrDir = c
+			break
+		}
+	}
+	if adrDir == "" {
+		return adrs
+	}
+	for i := range adrs {
+		raw, err := os.ReadFile(filepath.Join(adrDir, adrs[i].Filename))
+		if err != nil {
+			continue
+		}
+		lines := strings.Split(string(raw), "\n")
+		for idx, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "# ") {
+				heading := strings.TrimSpace(strings.TrimPrefix(trimmed, "# "))
+				if colonIdx := strings.Index(heading, ":"); colonIdx >= 0 && colonIdx+1 < len(heading) {
+					heading = strings.TrimSpace(heading[colonIdx+1:])
+				}
+				if heading != "" {
+					adrs[i].Title = ScrubStageSafeString(heading)
+				}
+			}
+			if strings.EqualFold(trimmed, "## Status") && idx+1 < len(lines) {
+				for j := idx + 1; j < len(lines) && j <= idx+4; j++ {
+					stLine := strings.TrimSpace(lines[j])
+					if stLine != "" && !strings.HasPrefix(stLine, "#") {
+						adrs[i].Status = ScrubStageSafeString(stLine)
+						break
+					}
+				}
+			}
+		}
+	}
+	return adrs
 }
 
 // ValidateCatalogGeometry verifies that all topology nodes fit within ViewBox without overlapping and all edge/stage/scenario references resolve.
@@ -1288,7 +1343,7 @@ func VerifyArchitectureCatalogDrift(repoRoot string) error {
 		DefaultHarness:        "multi",
 		LiveWorkerSlots:       4,
 		WarmIdleSlots:         4,
-		StorefrontBaselineTag: "baseline-healthy",
+		StorefrontBaselineTag: storefront.BaselineGitTag,
 	})
 
 	if err := ValidateCatalogGeometry(cat); err != nil {
@@ -1326,6 +1381,10 @@ func VerifyArchitectureCatalogDrift(repoRoot string) error {
 		srcPath := filepath.Join(repoRoot, filepath.FromSlash(svc.SourceFile))
 		if _, err := os.Stat(srcPath); err != nil {
 			return fmt.Errorf("missing service source file %s: %w", srcPath, err)
+		}
+		testPath := filepath.Join(repoRoot, filepath.FromSlash(svc.TestFile))
+		if _, err := os.Stat(testPath); err != nil {
+			return fmt.Errorf("missing service test file %s: %w", testPath, err)
 		}
 	}
 

@@ -29,7 +29,7 @@ func TestPathBasedRoutingAndCleanUI(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	for _, route := range []string{"/", "/workers", "/about"} {
+	for _, route := range []string{"/", "/workers", "/workers/", "/about", "/about/"} {
 		resp, err := http.Get(ts.URL + route)
 		if err != nil {
 			t.Fatalf("GET %s failed: %v", route, err)
@@ -109,8 +109,8 @@ func TestPathBasedRoutingAndCleanUI(t *testing.T) {
 		}
 	}
 
-	// Verify query-parameter view routing (?view=...) is rejected with 400 Bad Request
-	for _, badQuery := range []string{"/?view=about", "/workers?view=1", "/about?view=topology"} {
+	// Verify query-parameter routing (?view=... and ?route=...) is rejected with 400 Bad Request
+	for _, badQuery := range []string{"/?view=about", "/workers?view=1", "/about?view=topology", "/?route=about", "/about?route=lifecycle"} {
 		resp, err := http.Get(ts.URL + badQuery)
 		if err != nil {
 			t.Fatalf("GET %s failed: %v", badQuery, err)

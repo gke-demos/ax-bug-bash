@@ -6,7 +6,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
-export PATH="/usr/local/google/home/mofi/.local/go/bin:/usr/local/go/bin:${HOME}/go/bin:${HOME}/.cargo/bin:/tmp/bin:${PATH}"
+export PATH="${HOME}/.local/go/bin:/usr/local/go/bin:${HOME}/go/bin:${HOME}/.cargo/bin:/tmp/bin:${PATH}"
 
 DRY_RUN=false
 SKIP_BUILD=false
@@ -196,8 +196,20 @@ kubectl --context="${KUBE_CONTEXT}" -n ax-system get secret ax-postgres >/dev/nu
   kubectl --context="${KUBE_CONTEXT}" -n ax-system create secret generic ax-postgres --from-literal=password=ax-bug-bash-smoke-pw
 
 if command -v kubectl-ate >/dev/null 2>&1; then
-  echo "==> Applying OpenFGA AccessPolicy bindings via kubectl-ate..."
+  echo "==> Applying OpenFGA AccessPolicy bindings via kubectl-ate (--global and --atespace default)..."
   kubectl-ate update access-policy --global -f - <<EOF || true
+metadata:
+  name: default
+bindings:
+  - role: owner
+    members:
+      - user:system:serviceaccount:ate-system:ate-client
+      - user:system:serviceaccount:ax-system:ax-server
+  - role: viewer
+    members:
+      - user:system:serviceaccount:ax-bug-bash:ax-observer
+EOF
+  kubectl-ate update access-policy --atespace default -f - <<EOF || true
 metadata:
   name: default
 bindings:

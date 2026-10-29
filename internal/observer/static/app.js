@@ -18,10 +18,10 @@
   var selectedADRCategory = "ALL";
 
   function normalizeRoute(pathname) {
-    if (pathname === "/workers" || pathname.indexOf("/workers/") === 0) {
+    if (pathname === "/workers" || pathname === "/workers/") {
       return "/workers";
     }
-    if (pathname === "/about" || pathname.indexOf("/about/") === 0) {
+    if (pathname === "/about" || pathname === "/about/") {
       return "/about";
     }
     return "/";

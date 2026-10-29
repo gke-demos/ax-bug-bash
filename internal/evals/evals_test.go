@@ -222,9 +222,9 @@ func TestLiveGKEChaosSoakRunnerMockContract(t *testing.T) {
 
 	// Mock AX Observer server bound strictly to 127.0.0.1
 	// Embeds stage-unsafe tokens in RootTaskName/logs to verify stage-safe report scrubbing!
-	unsafeClusterToken := "ate" + "-cluster"
-	unsafeProjectToken := "mofi" + "labs"
-	unsafeNumberToken := "598464" + "211339"
+	unsafeClusterToken := "gke-demo-cluster-default-pool-9999"
+	unsafeProjectToken := "projects/demo-secret-project"
+	unsafeNumberToken := "123456789012"
 	observerSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -473,6 +473,10 @@ func TestLiveGKEChaosSoakRunnerMockContract(t *testing.T) {
 	if failedReport.AllPassed || failedReport.PassedTrajectories != 0 {
 		t.Fatalf("expected fail-closed AllPassed=false and PassedTrajectories=0 when SourceProvenance=FIXTURE, got %+v", failedReport)
 	}
+}
+
+func TestLiveGKEChaosSoak(t *testing.T) {
+	TestLiveGKEFourByFourChaosSoakAndDualExport(t)
 }
 
 func TestLiveGKEFourByFourChaosSoakAndDualExport(t *testing.T) {

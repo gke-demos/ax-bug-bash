@@ -273,11 +273,7 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 		text := string(raw)
 		contentsByFile[rel] = text
 
-		scanText := text
-		if rel == "internal/observer/about_catalog.go" {
-			scanText = stripStageUnsafePatternDefinitions(text)
-		}
-		lowerText := strings.ToLower(scanText)
+		lowerText := strings.ToLower(text)
 		for _, bad := range forbiddenTokens {
 			if strings.Contains(lowerText, strings.ToLower(bad)) {
 				report.Violations = append(report.Violations, fmt.Sprintf("%s contains forbidden string %q", rel, bad))
@@ -401,30 +397,6 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 
 	report.Passed = len(report.Violations) == 0 && len(report.CheckedFiles) == len(filesToScan)
 	return report, nil
-}
-
-// stripStageUnsafePatternDefinitions strips only the `var stageUnsafePatterns = []*regexp.Regexp{ ... }` block
-// from internal/observer/about_catalog.go so the stage-safe scrubber's own redaction regexes do not self-flag,
-// while still scanning all catalog descriptions, nodes, edges, ADR cards, and comments for forbidden tokens.
-func stripStageUnsafePatternDefinitions(src string) string {
-	var b strings.Builder
-	inBlock := false
-	for _, line := range strings.Split(src, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "var stageUnsafePatterns =") {
-			inBlock = true
-			continue
-		}
-		if inBlock {
-			if trimmed == "}" {
-				inBlock = false
-			}
-			continue
-		}
-		b.WriteString(line)
-		b.WriteByte('\n')
-	}
-	return b.String()
 }
 
 var (

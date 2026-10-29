@@ -475,7 +475,9 @@ func (s *Server) Handler() http.Handler {
 
 	// Path-based SPA routes (/, /workers, /about)
 	mux.HandleFunc("/workers", s.handleSPAIndex)
+	mux.HandleFunc("/workers/", s.handleSPAIndex)
 	mux.HandleFunc("/about", s.handleSPAIndex)
+	mux.HandleFunc("/about/", s.handleSPAIndex)
 	mux.HandleFunc("/", s.handleSPAIndex)
 
 	return httputil.WithSecurityHeaders(mux)
@@ -486,13 +488,18 @@ func (s *Server) handleSPAIndex(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if r.URL.Query().Has("view") || strings.Contains(strings.ToLower(r.URL.RawQuery), "view=") {
+	rawQueryLower := strings.ToLower(r.URL.RawQuery)
+	if r.URL.Query().Has("view") || r.URL.Query().Has("route") || strings.Contains(rawQueryLower, "view=") || strings.Contains(rawQueryLower, "route=") {
 		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "query-parameter view routing (?view=...) is forbidden; use path routing (/, /workers, /about)",
+			"error": "query-parameter routing (?view=... or ?route=...) is forbidden; use path routing (/, /workers, /about)",
 		})
 		return
 	}
-	switch r.URL.Path {
+	cleanPath := r.URL.Path
+	if cleanPath != "/" {
+		cleanPath = strings.TrimSuffix(cleanPath, "/")
+	}
+	switch cleanPath {
 	case "/", "/workers", "/about":
 	default:
 		http.NotFound(w, r)
@@ -574,14 +581,14 @@ func (s *Server) handleGetAboutCatalog(w http.ResponseWriter, r *http.Request) {
 	cat := BuildArchitectureTopologyCatalog(CatalogRuntimeTelemetry{
 		ActiveExecutionMode:   s.ExecutionMode(),
 		DefaultHarness:        s.DefaultHarness(),
-		LiveWorkerSlots:       maxInt(len(snap.WorkerPool.Workers), 4),
+		LiveWorkerSlots:       max(len(snap.WorkerPool.Workers), 4),
 		WarmIdleSlots:         warmIdle,
 		ActiveSandboxSlots:    activeSandbox,
-		ReclaimedWarmSlots:    maxInt(reclaimedWarm, snap.WorkerPool.TotalReclaimedSlots),
+		ReclaimedWarmSlots:    max(reclaimedWarm, snap.WorkerPool.TotalReclaimedSlots),
 		GatewaySessionsCount:  len(snap.Gateway.Sessions),
 		ActiveCascadeModel:    snap.Gateway.ActiveModel,
 		SourceProvenance:      snap.Gateway.SourceProvenance,
-		StorefrontBaselineTag: "baseline-healthy",
+		StorefrontBaselineTag: storefront.BaselineGitTag,
 		ActiveTreesCount:      len(snap.Trees),
 	})
 	httputil.WriteJSON(w, http.StatusOK, cat)
@@ -1515,11 +1522,4 @@ func firstNonEmptyStr(vals ...string) string {
 		}
 	}
 	return ""
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

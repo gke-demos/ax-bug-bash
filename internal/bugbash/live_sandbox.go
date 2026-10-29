@@ -319,7 +319,7 @@ func ExecuteSandboxChildTask(ctx context.Context, opts SandboxChildOptions) (Chi
 	}
 
 	res.GreenTestOutput = greenOut
-	res.AttemptCount = maxInt(1, maxInt(redAttemptsUsed, greenAttemptsUsed))
+	res.AttemptCount = max(1, max(redAttemptsUsed, greenAttemptsUsed))
 
 	emitStep(TDDStepEvent{
 		Phase:      PhasePatchGreen,
@@ -891,13 +891,6 @@ func truncateOutput(s string, maxChars int) string {
 		return s
 	}
 	return s[:maxChars] + "\n...[truncated]"
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 // SandboxRootOptions configures in-sandbox Root Task triage, Child Task fan-out, and verified branch merging.
