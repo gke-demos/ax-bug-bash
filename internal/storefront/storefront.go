@@ -271,6 +271,7 @@ func (rt *Runtime) Handler() http.Handler {
 	mux.HandleFunc("/api/incidents/activate", rt.handleActivateIncident)
 	mux.HandleFunc("/api/incidents/randomize", rt.handleRandomizeIncident)
 	mux.HandleFunc("/api/incidents/heal", rt.handleHealIncident)
+	mux.HandleFunc("/api/incidents/reset", rt.handleResetIncident)
 	mux.HandleFunc("/api/logs", rt.handleLogs)
 	mux.HandleFunc("/metrics", rt.handleMetrics)
 	mux.HandleFunc("/", rt.handleIndex)
@@ -368,6 +369,23 @@ func (rt *Runtime) handleHealIncident(w http.ResponseWriter, r *http.Request) {
 		"status":          "healed",
 		"active_scenario": rt.ActiveScenario(),
 	})
+}
+
+func (rt *Runtime) handleResetIncident(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	res, err := rt.gitMgr.ResetToBaselineReport()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	rt.mu.Lock()
+	rt.activeIncidentID = ""
+	rt.healedServices = make(map[string]map[string]bool)
+	rt.mu.Unlock()
+	writeJSON(w, http.StatusOK, res)
 }
 
 func (rt *Runtime) handleLogs(w http.ResponseWriter, r *http.Request) {
