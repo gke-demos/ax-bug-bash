@@ -64,16 +64,15 @@ curl -sS -X POST http://localhost:3001/api/incidents/activate \
 curl -i -sS -X POST http://localhost:3001/api/cart/checkout \
   -H "Content-Type: application/json" \
   -d '{
-    "customer_id": "cust-inc-101",
     "currency": "USD",
     "promo_codes": ["SAVE20", "FLAT15"],
     "items": [
       {
-        "sku": "ANALOG-SYNTH-CABLE",
-        "name": "Braided Patch Cable Pack",
+        "sku": "sku-cable-usbc",
+        "name": "Braided USB-C 240W Cable",
         "quantity": 1,
-        "unit_price_cents": 3200,
-        "weight_grams": 450,
+        "unit_price_cents": 1600,
+        "weight_grams": 120,
         "hazmat_class": "NONE"
       }
     ]
@@ -85,7 +84,9 @@ curl -sS -X POST http://localhost:3000/api/incidents/trigger \
   -d '{"incident_id":"INC-101","harness":"multi","model":"gemini-3.8-flash"}' | jq .
 ```
 
-Inspect the live state snapshot from `/api/state` to see the **Root Task** (`triage-inc-101`) isolate only the 2 implicated services (`pricing-service` and `shipping-service`), skip the 3 healthy services (`storefront-web`, `checkout-service`, `inventory-service`), run Red-Green TDD across **Antigravity** and **OpenCode**, merge the Git branches, and heal `:3001` **Retail Storefront** back to `HTTP 200`:
+Submitting this `$16.00` (`1600` cents) `"sku-cable-usbc"` cart with stacked `SAVE20` (`$3.20` off) and `FLAT15` (`$15.00` off) promo codes produces `subtotal_cents = -220`, raising `NegativeSubtotalError` in `pricing-service` and `CarrierTariffBoundsError` in `shipping-service` (because baseline tests only checked carts over `$40.00`). Similarly, triggering `INC-102` (`"sku-mechanical-kb-bundle"`, `available = 2`, `requested = 2`, `bonus_bundle_units = 2`) causes a `2u32 - 4u32` unsigned underflow in `inventory-service` and `checkout-service`.
+
+Inspect the live state snapshot from `/api/state` to see the **Root Task** (`triage-inc-101`) isolate only the 2 implicated services (`pricing-service` and `shipping-service`), skip the 3 healthy services (`storefront-web`, `checkout-service`, `inventory-service`), run Red-Green TDD (`test_stacked_promos_clamp_at_zero_subtotal` in Python and `TestQuoteCarrierRateZeroSubtotalStackedPromo` / `TestShippingQuoteClampsNegativeSubtotal` in Go) across **Antigravity** and **OpenCode**, merge the Git branches, and heal `:3001` **Retail Storefront** back to `HTTP 200`:
 
 ```bash
 curl -sS http://localhost:3000/api/state | jq '{
@@ -360,13 +361,13 @@ In Lab 5, you will port-forward the three live GKE services to your workstation,
 
 ### Step 5.1: Port-Forward the Three Live GKE Surfaces
 
-Open a background terminal (or run the commands below in background subshells) to forward the three cluster services using their exact service ports (`3000:3000`, `3001:3001`, `3002:3002`) plus `storefront-git` (`3003:3001`) and `prometheus` (`9090:9090`):
+Open a background terminal (or run the commands below in background subshells) to forward the three cluster services using their exact service ports (`3000:3000`, `3001:3001`, `3002:3002`) plus `storefront-git` (`3003:8090`) and `prometheus` (`9090:9090`):
 
 ```bash
 kubectl -n ax-bug-bash port-forward svc/ax-observer 3000:3000 >/tmp/pf-observer.log 2>&1 &
 kubectl -n ax-bug-bash port-forward svc/storefront 3001:3001 >/tmp/pf-storefront.log 2>&1 &
 kubectl -n monitoring port-forward svc/grafana 3002:3002 >/tmp/pf-grafana.log 2>&1 &
-kubectl -n ax-bug-bash port-forward svc/storefront-git 3003:3001 >/tmp/pf-git.log 2>&1 &
+kubectl -n ax-bug-bash port-forward svc/storefront-git 3003:8090 >/tmp/pf-git.log 2>&1 &
 kubectl -n monitoring port-forward svc/prometheus 9090:9090 >/tmp/pf-prometheus.log 2>&1 &
 ```
 

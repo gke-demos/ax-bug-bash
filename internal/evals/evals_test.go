@@ -212,6 +212,11 @@ func TestVerifyMarkdownHumanizerAndHygiene(t *testing.T) {
 			wantSubstr: "staged opener",
 		},
 		{
+			name:       "dramatic_one_line_closer",
+			markdown:   "The supervisor swaps the process.\n\nThat is the real win.\n",
+			wantSubstr: "closer",
+		},
+		{
 			name:       "AI filler word delve",
 			markdown:   "We will delve into the sandbox checkpointing implementation.\n",
 			wantSubstr: "filler",

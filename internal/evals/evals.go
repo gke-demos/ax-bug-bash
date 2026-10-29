@@ -234,6 +234,7 @@ var (
 	mdLinkTargetRe        = regexp.MustCompile(`\]\([^)]*\)`)
 	contrastTellRe        = regexp.MustCompile(`(?i)(?:\bnot\s+(?:just|only|merely)\s+[^.!?\n]{1,120}?,\s*(?:but|it's|it\s+is)\b|\bnot\s+(?:a|an|the|about|by|for|in|on|to|with|[a-z0-9_-]+)\s+[^.!?\n]{0,80}?,\s*but\b|\bit(?:'s|\s+is)\s+not\s+[^.!?\n]{1,80}?,\s*it(?:'s|\s+is)\b)`)
 	stagedOpenerRe        = regexp.MustCompile(`(?i)(?:\b(?:let's|let\s+us)\s+(?:dive\s+in|explore|break\s+this\s+down|be\s+honest)\b|\bhere's\s+the\s+thing\b|\bhere's\s+what\s+you\s+need\s+to\s+know\b|\bwithout\s+further\s+ado\b|\bin\s+this\s+(?:blog\s+)?post,?\s+we\s+will\b)`)
+	dramaticCloserRe      = regexp.MustCompile("(?im)^\\s*(?:that is the real win\\.|that distinction matters\\.|read that again\\.|let that sink in\\.|the old rules were gone\\.)\\s*$")
 	aiFillerWordRe        = regexp.MustCompile(`(?i)\b(?:delve|delves|delving|tapestry|testament|pivotal|seamlessly|unlock|unlocks|unlocking|paradigm|crucial|meticulous|meticulously|groundbreaking|breathtaking)\b`)
 	markdownStageUnsafeRe = regexp.MustCompile(`(?i)(?:gs://[a-z0-9._/-]+|\bgke_[a-z0-9-]+_[a-z0-9-]+_[a-z0-9-]+\b|\bgke-[a-z0-9-]+-(?:pool|node|default)[a-z0-9_-]*|\b\d{12}\b|\bprojects/[a-z][a-z0-9-]{4,29}\b)`)
 )
@@ -299,6 +300,9 @@ func VerifyMarkdownHumanizerAndHygiene(relPath, content string) []string {
 		if match := stagedOpenerRe.FindString(proseLine); match != "" {
 			violations = append(violations, fmt.Sprintf("%s:%d contains forbidden staged opener %q", relPath, lineNum, match))
 		}
+		if match := dramaticCloserRe.FindString(proseLine); match != "" {
+			violations = append(violations, fmt.Sprintf("%s:%d contains forbidden dramatic one-line closer %q", relPath, lineNum, strings.TrimSpace(match)))
+		}
 		if match := aiFillerWordRe.FindString(proseLine); match != "" {
 			violations = append(violations, fmt.Sprintf("%s:%d contains forbidden AI filler word %q", relPath, lineNum, match))
 		}
@@ -346,14 +350,16 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 		text := string(raw)
 		contentsByFile[rel] = text
 
+		if strings.HasPrefix(rel, "docs/blog/") || strings.HasPrefix(rel, "docs/tutorial/") {
+			report.Violations = append(report.Violations, VerifyMarkdownHumanizerAndHygiene(rel, text)...)
+			continue
+		}
+
 		lowerText := strings.ToLower(text)
 		for _, bad := range forbiddenTokens {
 			if strings.Contains(lowerText, strings.ToLower(bad)) {
 				report.Violations = append(report.Violations, fmt.Sprintf("%s contains forbidden string %q", rel, bad))
 			}
-		}
-		if strings.HasPrefix(rel, "docs/blog/") || strings.HasPrefix(rel, "docs/tutorial/") {
-			report.Violations = append(report.Violations, VerifyMarkdownHumanizerAndHygiene(rel, text)...)
 		}
 	}
 

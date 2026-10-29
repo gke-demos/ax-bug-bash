@@ -4,38 +4,37 @@
 
 Every microservice in our five-service polyglot **Retail Storefront** passed its unit test suite before deployment. Running `./services/run-service-tests.sh --all` executes `npm test` on `storefront-web` (Node.js and TypeScript), `go test ./...` on `checkout-service` (Go) and `shipping-service` (Go), `python3 -m unittest` on `pricing-service` (Python and FastAPI), and `cargo test` on `inventory-service` (Rust and Axum). Every check reports green because each service tests its own happy path and single-parameter boundaries in isolation.
 
-Production traffic crosses those boundaries in ways single-service unit tests miss. Consider what happens when a shopper submits a cart containing a $32.00 item and stacks two valid promotional codes, `SAVE20` (20% off) and `FLAT15` ($15.00 off), under **Incident Scenario** `INC-101` (Stacked Promo Negative Subtotal Crash):
+Production traffic crosses those boundaries in ways single-service unit tests miss. Consider what happens when a shopper submits a cart containing a `$16.00` accessory (`"sku-cable-usbc"`, `"Braided USB-C 240W Cable"`) and stacks two valid promotional codes, `SAVE20` (20% off) and `FLAT15` (`$15.00` off), under **Incident Scenario** `INC-101` (Stacked Promo Negative Subtotal Crash):
 
 ```json
 {
-  "customer_id": "cust-inc-101",
   "currency": "USD",
   "promo_codes": ["SAVE20", "FLAT15"],
   "items": [
     {
-      "sku": "ANALOG-SYNTH-CABLE",
-      "name": "Braided Patch Cable Pack",
+      "sku": "sku-cable-usbc",
+      "name": "Braided USB-C 240W Cable",
       "quantity": 1,
-      "unit_price_cents": 3200,
-      "weight_grams": 450,
+      "unit_price_cents": 1600,
+      "weight_grams": 120,
       "hazmat_class": "NONE"
     }
   ]
 }
 ```
 
-When `checkout-service` forwards this cart to `pricing-service`, the Python discount engine applies `SAVE20` ($6.40 off) and `FLAT15` ($15.00 off) sequentially with an uncapped promotional rebate multiplier, driving `subtotal_cents` below zero to `-180`. Because the baseline unit tests in `services/pricing-service/test_pricing.py` only tested `SAVE20` and `FLAT15` individually on carts over $40.00, the missing zero floor never failed in CI. Next, `checkout-service` passes that negative subtotal to `shipping-service` (`POST /api/shipping/quote`). The Go rate calculator rejects negative subtotals with `NegativeSubtotalError` and returns `HTTP 500 Internal Server Error`.
+When `checkout-service` forwards this cart to `pricing-service`, the Python discount engine applies `SAVE20` (`$3.20` off, leaving `1280` cents) and `FLAT15` (`$15.00` off) sequentially without clamping at zero, driving `subtotal_cents` below zero to `-220` and raising `NegativeSubtotalError`. Because the baseline unit tests in `services/pricing-service/test_pricing.py` only tested `SAVE20` and `FLAT15` individually on carts over `$40.00`, the missing zero floor never failed in CI. Next, `checkout-service` passes the non-positive promotional subtotal to `shipping-service` (`POST /api/shipping/quote`). The Go rate calculator rejects it with `CarrierTariffBoundsError` and returns `HTTP 500 Internal Server Error`.
 
-A second scenario, `INC-102` (Flash-Sale Bundle `u32` Stock Underflow), fails across Rust and Go. When a flash-sale cart requests 3 units of a bundle with 2 bonus units (`bonus_bundle_units = 2`) against an inventory ledger holding 4 units, `inventory-service` in Rust computes `available_stock - (requested_qty + bonus_bundle_units)` using unsigned 32-bit integers (`4u32 - 5u32`). Checked arithmetic rejects the unsigned underflow, and `checkout-service` returns `HTTP 500`. Two additional scenarios complete the catalog: `INC-103` (Zero-Decimal `JPY` Currency Rounding Mismatch across TypeScript, Python, and Go) and `INC-104` (Lithium Hazmat Weight Tier Overflow at `3400g` across Rust and Go).
+A second scenario, `INC-102` (Flash-Sale Bundle `u32` Stock Underflow), fails across Rust and Go. When a flash-sale cart requests 2 units of `"sku-mechanical-kb-bundle"` (`requested = 2`) with 2 bonus units (`bonus_bundle_units = 2`) against an inventory ledger holding 2 units (`available = 2`), `inventory-service` in Rust computes `available - (requested + bonus_bundle_units)` using unsigned 32-bit integers (`2u32 - 4u32`). Checked arithmetic panics with `RustU32UnderflowPanic` on the unsigned underflow, and `checkout-service` fails with `FlashBundleUnderflowError` (`HTTP 500`). Two additional scenarios complete the catalog: `INC-103` (Zero-Decimal `JPY` Currency Rounding Mismatch across TypeScript, Python, and Go) and `INC-104` (Lithium Hazmat Weight Tier Overflow at `3400g` across Rust and Go).
 
 ```text
 level=ERROR service=pricing-service incident_id=INC-101 request_id=req-101-8f2a
-msg="NegativeSubtotalError: stacked promos ['SAVE20', 'FLAT15'] produced subtotal_cents=-180 (< 0)"
-file="services/pricing-service/pricing.py:74"
+msg="HTTP 500: NegativeSubtotalError: stacked promo codes ['SAVE20', 'FLAT15'] produced negative subtotal -220 cents"
+file="services/pricing-service/pricing.py:25"
 
 level=ERROR service=shipping-service incident_id=INC-101 request_id=req-101-8f2a
-msg="ShippingRateError: cannot compute shipping tier for negative subtotal_cents=-180"
-file="services/shipping-service/shipping.go:61"
+msg="HTTP 500: CarrierTariffBoundsError: non-positive order subtotal 0 cents rejected by carrier rate engine"
+file="services/shipping-service/shipping.go:12"
 ```
 
 Within 15 seconds of the first failing checkout on Surface 1 (`:3001` **Retail Storefront**), Surface 2 (`:3002` **Monitoring Stack**) catches the spike. Prometheus scrapes all five service `/metrics` endpoints every 5 seconds and evaluates `StorefrontHTTP500Spike` over a 3-sample `[15s]` window with `for: 0s`. Alertmanager groups the firing alert by `alertname` and dispatches a `POST /api/webhooks/alertmanager` webhook to Surface 3 (`:3000` **AX Observer**).
@@ -210,7 +209,7 @@ When a **Bug Bash Tree** runs in `multi` mode, the **Root Task** assigns differe
 
 Every **Child Task** enforces a strict two-phase Red-Green TDD contract (`internal/bugbash/live_sandbox.go`):
 
-- **Phase 1 (`REPRODUCE_RED`)**: The **Child Task** invokes its assigned **Coding Harness** to author a new unit test named `mission.RegressionTestName` (for example, `test_stacked_promo_negative_subtotal_floor` in `services/pricing-service/test_pricing.py`) using the exact `failing_request` payload from the production incident. Before running the service test runner, the sandbox restores the baseline production source file to guarantee the model did not prematurely patch production code during the Red step. The step passes only if the test file changed and the service test suite fails on the new test.
+- **Phase 1 (`REPRODUCE_RED`)**: The **Child Task** invokes its assigned **Coding Harness** to author a new unit test named `mission.RegressionTestName` (for example, `test_stacked_promos_clamp_at_zero_subtotal` in `services/pricing-service/test_pricing.py` and `TestQuoteCarrierRateZeroSubtotalStackedPromo` / `TestShippingQuoteClampsNegativeSubtotal` in `services/shipping-service/shipping_test.go`) using the exact `failing_request` payload from the production incident. Before running the service test runner, the sandbox restores the baseline production source file to guarantee the model did not prematurely patch production code during the Red step. The step passes only if the test file changed and the service test suite fails on the new test.
 - **Phase 2 (`PATCH_GREEN`)**: The **Child Task** invokes the **Coding Harness** to patch `detail.SourceFile` (for example, clamping `subtotal_cents = max(0, subtotal_cents)` in `services/pricing-service/pricing.py`) while keeping the new regression test intact. The step passes only when the full language test suite exits `0`.
 
 ### Zero-Secret Credentials and Designing for Compute Obtainability
