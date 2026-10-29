@@ -59,3 +59,11 @@ _Avoid_: Mock flag, live mode, fallback status.
 **Architecture Topology Catalog**:
 The canonical, drift-tested inventory of the system's surfaces, microservices, Incident Scenarios, Coding Harnesses, and task-lifecycle transitions that drives the interactive `/about` visualizer.
 _Avoid_: Static README copy, hardcoded diagram labels.
+
+**Stage Walkthrough**:
+The scripted, deterministic live demonstration across the three decoupled surfaces (`:3001` Retail Storefront, `:3002` Monitoring, and `:3000` AX Observer) showing an Incident Scenario from HTTP 500 trigger through Child Task Red-Green TDD to `< 10s` selective hot-reload and slot reclamation.
+_Avoid_: Canned screengrab, mocked replay, synthetic slideshow.
+
+**Three-Layer Substrate Stack**:
+The architectural composition of Agent Substrate v0.6.0 sandbox actors and volume snapshots (Layer 1), `agent-substrate/env` guest lifecycle probes and workspace hooks (Layer 2), and `google/ax` declarative `Task`, `Workspace`, `Model`, and Custom Runner orchestration (Layer 3).
+_Avoid_: Monolithic agent framework, single-layer CRD wrapper.
