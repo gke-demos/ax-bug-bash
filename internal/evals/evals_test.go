@@ -124,8 +124,9 @@ func TestRepositoryHygieneAndManifestContract(t *testing.T) {
 		t.Errorf("len(CheckedFiles) = %d, want >= 10 (including 03-gmp-podmonitoring.yaml and internal/observer/about_catalog.go)", len(hygiene.CheckedFiles))
 	}
 	wantChecked := map[string]bool{
-		"manifests/monitoring/03-gmp-podmonitoring.yaml": false,
-		"internal/observer/about_catalog.go":             false,
+		"manifests/monitoring/03-gmp-podmonitoring.yaml":            false,
+		"internal/observer/about_catalog.go":                        false,
+		"docs/blog/self-spawning-bug-bash-tree-on-google-ax.md":     false,
 	}
 	for _, f := range hygiene.CheckedFiles {
 		if _, ok := wantChecked[f]; ok {
@@ -136,6 +137,131 @@ func TestRepositoryHygieneAndManifestContract(t *testing.T) {
 		if !seen {
 			t.Errorf("expected CheckedFiles to contain %q, got %v", f, hygiene.CheckedFiles)
 		}
+	}
+}
+
+func TestVerifyMarkdownHumanizerAndHygiene(t *testing.T) {
+	cleanMarkdown := "# Section 1: Why CI Passed and Production Still Returned HTTP 500\n\n" +
+		"Every single-service unit test passes in baseline CI, yet a stacked coupon cart triggers an HTTP 500 response within 15s.\n\n" +
+		"Use `kubectl --context=current get pods` or `--execute-task` with `gemini-3.8-flash -> gemini-3.7-flash`.\n\n" +
+		"```go\n" +
+		"// Code comment with em-dash \u2014 and --flag -> arrow inside fenced block is allowed\n" +
+		"cmd := exec.Command(\"ax-task-runner\", \"--execute-task\", \"--role=child-fixer\")\n" +
+		"```\n"
+
+	if violations := evals.VerifyMarkdownHumanizerAndHygiene("docs/blog/clean.md", cleanMarkdown); len(violations) != 0 {
+		t.Fatalf("expected zero violations on clean technical markdown, got: %v", violations)
+	}
+
+	cases := []struct {
+		name        string
+		markdown    string
+		wantSubstr  string
+	}{
+		{
+			name:       "em dash in prose",
+			markdown:   "The Root Task isolates implicated services \u2014 skipping healthy ones.\n",
+			wantSubstr: "dash",
+		},
+		{
+			name:       "en dash in prose",
+			markdown:   "The rollout finishes in 820ms \u2013 4200ms across the cluster.\n",
+			wantSubstr: "dash",
+		},
+		{
+			name:       "spaced double hyphen in prose",
+			markdown:   "The supervisor swaps the process -- without dropping active connections.\n",
+			wantSubstr: "dash",
+		},
+		{
+			name:       "not X, but Y contrast",
+			markdown:   "This is not a static retry loop, but a recursive task tree.\n",
+			wantSubstr: "contrast",
+		},
+		{
+			name:       "not just X, it's Y contrast",
+			markdown:   "It is not just a container runner, it's a warm sandbox pool.\n",
+			wantSubstr: "contrast",
+		},
+		{
+			name:       "not only X, but Y contrast",
+			markdown:   "The gateway provides not only authentication, but automatic model failover.\n",
+			wantSubstr: "contrast",
+		},
+		{
+			name:       "not merely X, but Y contrast",
+			markdown:   "The supervisor is not merely a wrapper, but a PID-1 reverse proxy.\n",
+			wantSubstr: "contrast",
+		},
+		{
+			name:       "staged opener Let's dive in",
+			markdown:   "Let's dive in and see how the Root Task works.\n",
+			wantSubstr: "staged opener",
+		},
+		{
+			name:       "staged opener Here's the thing",
+			markdown:   "Here's the thing about microservice unit tests.\n",
+			wantSubstr: "staged opener",
+		},
+		{
+			name:       "staged opener Without further ado",
+			markdown:   "Without further ado, here is the benchmark table.\n",
+			wantSubstr: "staged opener",
+		},
+		{
+			name:       "AI filler word delve",
+			markdown:   "We will delve into the sandbox checkpointing implementation.\n",
+			wantSubstr: "filler",
+		},
+		{
+			name:       "AI filler word tapestry",
+			markdown:   "The system weaves a rich tapestry of telemetry signals.\n",
+			wantSubstr: "filler",
+		},
+		{
+			name:       "AI filler word seamlessly",
+			markdown:   "Child Tasks fail over seamlessly across model tiers.\n",
+			wantSubstr: "filler",
+		},
+		{
+			name:       "AI filler word pivotal",
+			markdown:   "Warm sandboxes play a pivotal role in fast recovery.\n",
+			wantSubstr: "filler",
+		},
+		{
+			name:       "forbidden retired brand token",
+			markdown:   "The proxy routes requests to " + "Vertex" + " AI endpoints.\n",
+			wantSubstr: "forbidden",
+		},
+		{
+			name:       "forbidden internal term",
+			markdown:   "The gateway designs for " + "fluid" + " compute across regions.\n",
+			wantSubstr: "forbidden",
+		},
+		{
+			name:       "forbidden personal cluster or bucket identifier",
+			markdown:   "Snapshots upload to gs://my-personal-bucket/snaps on " + "ate" + "-cluster.\n",
+			wantSubstr: "forbidden",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := evals.VerifyMarkdownHumanizerAndHygiene("docs/blog/test.md", tc.markdown)
+			if len(v) == 0 {
+				t.Fatalf("expected violation containing %q for %s, got none", tc.wantSubstr, tc.name)
+			}
+			matched := false
+			for _, msg := range v {
+				if strings.Contains(strings.ToLower(msg), strings.ToLower(tc.wantSubstr)) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				t.Fatalf("expected violation containing %q, got %v", tc.wantSubstr, v)
+			}
+		})
 	}
 }
 
