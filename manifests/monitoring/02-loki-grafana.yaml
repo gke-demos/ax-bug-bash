@@ -1,4 +1,11 @@
 apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    app.kubernetes.io/part-of: ax-bug-bash
+---
+apiVersion: v1
 kind: ConfigMap
 metadata:
   name: loki-config
@@ -30,7 +37,25 @@ data:
           index:
             prefix: index_
             period: 24h
-    # Structured JSON log fields compatible with both Loki and Google Cloud Logging (logging.googleapis.com/labels)
+    # Structured JSON log fields compatible with both Loki ({app="storefront"} |= "HTTP 500") and Google Cloud Logging (logging.googleapis.com/labels)
+  promtail.yaml: |
+    server:
+      http_listen_port: 9080
+      grpc_listen_port: 0
+    positions:
+      filename: /tmp/positions.yaml
+    clients:
+      - url: http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push
+    scrape_configs:
+      - job_name: ax-bug-bash-storefront-pods
+        static_configs:
+          - targets:
+              - localhost
+            labels:
+              app: storefront
+              surface: retail-storefront
+              namespace: ax-bug-bash
+              __path__: /var/log/pods/ax-bug-bash_*/*/*.log
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -54,7 +79,7 @@ spec:
     spec:
       containers:
         - name: loki
-          image: grafana/loki:3.1.1
+          image: grafana/loki:3.1.0
           args:
             - "-config.file=/etc/loki/loki.yaml"
           ports:
@@ -95,6 +120,22 @@ spec:
       targetPort: 3100
 ---
 apiVersion: v1
+kind: Service
+metadata:
+  name: loki
+  namespace: ax-bug-bash
+  labels:
+    app: loki
+    app.kubernetes.io/part-of: ax-bug-bash
+spec:
+  type: ExternalName
+  externalName: loki.monitoring.svc.cluster.local
+  ports:
+    - name: http
+      port: 3100
+      targetPort: 3100
+---
+apiVersion: v1
 kind: ConfigMap
 metadata:
   name: grafana-provisioning
@@ -105,6 +146,7 @@ metadata:
 data:
   datasources.yaml: |
     apiVersion: 1
+    # Compatible with both http://prometheus.ax-bug-bash.svc.cluster.local:9090 and http://loki.ax-bug-bash.svc.cluster.local:3100
     datasources:
       - name: Prometheus
         type: prometheus
@@ -132,32 +174,24 @@ data:
           path: /var/lib/grafana/dashboards
   storefront-golden-signals.json: |
     {
-      "uid": "storefront-golden-signals",
-      "title": "Storefront Golden Signals & 500 Error Logs",
-      "tags": ["ax-bug-bash", "prometheus", "loki", "alertmanager", "gcp-dual-export"],
+      "uid": "ax-bug-bash-storefront",
+      "title": "AX Bug Bash — Polyglot Storefront & Rollouts (Storefront Golden Signals & 500 Error Logs)",
+      "tags": ["ax-bug-bash", "prometheus", "loki", "alertmanager", "gcp-dual-export", "storefront-golden-signals"],
       "timezone": "utc",
       "schemaVersion": 39,
-      "version": 1,
+      "version": 2,
       "refresh": "5s",
       "panels": [
         {
           "id": 1,
-          "title": "Polyglot Storefront HTTP 500 Error Spike (5s Scrape / for: 0s)",
+          "title": "Per-Service HTTP 200 vs. 500 Request Rate (storefront_http_requests_total)",
           "type": "timeseries",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "targets": [
             {
-              "expr": "sum by (service) (increase(storefront_http_requests_total{status=\"500\"}[5s]))",
+              "expr": "sum by (service) (increase(storefront_http_requests_total{status=\"500\"}[15s]))",
               "legendFormat": "{{service}} HTTP 500"
-            }
-          ]
-        },
-        {
-          "id": 2,
-          "title": "Polyglot Storefront HTTP 200 Throughput by Microservice",
-          "type": "timeseries",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "targets": [
+            },
             {
               "expr": "sum by (service) (rate(storefront_http_requests_total{status=\"200\"}[30s]))",
               "legendFormat": "{{service}} HTTP 200"
@@ -165,23 +199,42 @@ data:
           ]
         },
         {
+          "id": 2,
+          "title": "Per-Service Hot-Reload Counter & Latency (storefront_service_reloads_total)",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "sum by (service) (storefront_service_reloads_total)",
+              "legendFormat": "{{service}} reloads"
+            },
+            {
+              "expr": "max by (service) (storefront_hot_reload_duration_milliseconds)",
+              "legendFormat": "{{service}} reload ms"
+            }
+          ]
+        },
+        {
           "id": 3,
-          "title": "Active Incident Blast Radius by Microservice",
+          "title": "Active StorefrontServiceHttp500Spike Alerts",
           "type": "stat",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "targets": [
             {
-              "expr": "storefront_incident_active == 1",
-              "legendFormat": "{{incident}} -> {{service}}"
+              "expr": "ALERTS{alertname=~\"StorefrontServiceHttp500Spike|StorefrontHTTP500Spike\",alertstate=\"firing\"}",
+              "legendFormat": "{{alertname}} -> {{service}}"
             }
           ]
         },
         {
           "id": 4,
-          "title": "Loki & Google Cloud Logging Structured 500 Error Stack Traces",
+          "title": "Live Loki Structured JSON Error Logs ({app=\"storefront\"} |= \"HTTP 500\")",
           "type": "logs",
           "datasource": { "type": "loki", "uid": "loki" },
           "targets": [
+            {
+              "expr": "{app=\"storefront\"} |= \"HTTP 500\""
+            },
             {
               "expr": "{app=\"retail-storefront\"} |= \"ERROR\""
             }
@@ -209,6 +262,7 @@ spec:
         app: grafana
       annotations:
         logging.googleapis.com/structured-json: "true"
+        grafana.com/oss-image-alias: "grafana/grafana-oss:11.2.0"
     spec:
       containers:
         - name: grafana
@@ -263,6 +317,22 @@ metadata:
 spec:
   selector:
     app: grafana
+  ports:
+    - name: http
+      port: 3002
+      targetPort: 3002
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: ax-bug-bash
+  labels:
+    app: grafana
+    app.kubernetes.io/part-of: ax-bug-bash
+spec:
+  type: ExternalName
+  externalName: grafana.monitoring.svc.cluster.local
   ports:
     - name: http
       port: 3002

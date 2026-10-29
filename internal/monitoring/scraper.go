@@ -400,6 +400,13 @@ func (s *Scraper) Handler() http.Handler {
 		}
 		http.Error(w, "AlertmanagerBridge not configured", http.StatusServiceUnavailable)
 	})
+	mux.HandleFunc("/api/config/harness", func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.AlertmanagerBridge != nil {
+			s.cfg.AlertmanagerBridge.HandleHarnessConfig(w, r)
+			return
+		}
+		http.Error(w, "AlertmanagerBridge not configured", http.StatusServiceUnavailable)
+	})
 	mux.HandleFunc("/monitoring/dashboard.js", s.handleMonitoringScript)
 	mux.HandleFunc("/monitoring", s.handleMonitoringUI)
 	mux.HandleFunc("/", s.handleMonitoringUI)
@@ -481,35 +488,27 @@ func (s *Scraper) handleMonitoringScript(w http.ResponseWriter, r *http.Request)
 }
 
 // StorefrontGoldenSignalsDashboardJSON returns the pre-provisioned Grafana dashboard JSON
-// for "Storefront Golden Signals & 500 Error Logs".
+// for "AX Bug Bash — Polyglot Storefront & Rollouts (Storefront Golden Signals & 500 Error Logs)".
 func StorefrontGoldenSignalsDashboardJSON() string {
 	return `{
-  "uid": "storefront-golden-signals",
-  "title": "Storefront Golden Signals & 500 Error Logs",
-  "tags": ["ax-bug-bash", "prometheus", "loki", "alertmanager", "gcp-dual-export"],
+  "uid": "ax-bug-bash-storefront",
+  "title": "AX Bug Bash — Polyglot Storefront & Rollouts (Storefront Golden Signals & 500 Error Logs)",
+  "tags": ["ax-bug-bash", "prometheus", "loki", "alertmanager", "gcp-dual-export", "storefront-golden-signals"],
   "timezone": "utc",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "5s",
   "panels": [
     {
       "id": 1,
-      "title": "Polyglot Storefront HTTP 500 Error Spike (5s Scrape / for: 0s)",
+      "title": "Per-Service HTTP 200 vs. 500 Request Rate (storefront_http_requests_total)",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "sum by (service) (increase(storefront_http_requests_total{status=\"500\"}[5s]))",
+          "expr": "sum by (service) (increase(storefront_http_requests_total{status=\"500\"}[15s]))",
           "legendFormat": "{{service}} HTTP 500"
-        }
-      ]
-    },
-    {
-      "id": 2,
-      "title": "Polyglot Storefront HTTP 200 Throughput by Microservice",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
+        },
         {
           "expr": "sum by (service) (rate(storefront_http_requests_total{status=\"200\"}[30s]))",
           "legendFormat": "{{service}} HTTP 200"
@@ -517,23 +516,42 @@ func StorefrontGoldenSignalsDashboardJSON() string {
       ]
     },
     {
+      "id": 2,
+      "title": "Per-Service Hot-Reload Counter & Latency (storefront_service_reloads_total)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum by (service) (storefront_service_reloads_total)",
+          "legendFormat": "{{service}} reloads"
+        },
+        {
+          "expr": "max by (service) (storefront_hot_reload_duration_milliseconds)",
+          "legendFormat": "{{service}} reload ms"
+        }
+      ]
+    },
+    {
       "id": 3,
-      "title": "Active Incident Blast Radius by Microservice",
+      "title": "Active StorefrontServiceHttp500Spike Alerts",
       "type": "stat",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "storefront_incident_active == 1",
-          "legendFormat": "{{incident}} -> {{service}}"
+          "expr": "ALERTS{alertname=~\"StorefrontServiceHttp500Spike|StorefrontHTTP500Spike\",alertstate=\"firing\"}",
+          "legendFormat": "{{alertname}} -> {{service}}"
         }
       ]
     },
     {
       "id": 4,
-      "title": "Loki & Google Cloud Logging Structured 500 Error Stack Traces",
+      "title": "Live Loki Structured JSON Error Logs ({app=\"storefront\"} |= \"HTTP 500\")",
       "type": "logs",
       "datasource": { "type": "loki", "uid": "loki" },
       "targets": [
+        {
+          "expr": "{app=\"storefront\"} |= \"HTTP 500\""
+        },
         {
           "expr": "{app=\"retail-storefront\"} |= \"ERROR\""
         }

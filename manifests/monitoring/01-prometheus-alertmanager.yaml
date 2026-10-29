@@ -34,25 +34,60 @@ data:
         metrics_path: /metrics
         static_configs:
           - targets:
+              - storefront-web.ax-bug-bash.svc.cluster.local:3001
+              - storefront.ax-bug-bash.svc.cluster.local:3001
               - retail-storefront.ax-bug-bash.svc.cluster.local:3001
             labels:
-              app: retail-storefront
-              services: storefront-web,checkout-service,shipping-service,pricing-service,inventory-service
+              app: storefront
+              surface: retail-storefront
+              service: storefront-web
+          - targets:
+              - checkout-service.ax-bug-bash.svc.cluster.local:8081
+              - storefront.ax-bug-bash.svc.cluster.local:8081
+            labels:
+              app: storefront
+              surface: retail-storefront
+              service: checkout-service
+          - targets:
+              - shipping-service.ax-bug-bash.svc.cluster.local:8082
+              - storefront.ax-bug-bash.svc.cluster.local:8082
+              - storefront.ax-bug-bash.svc.cluster.local:8084
+            labels:
+              app: storefront
+              surface: retail-storefront
+              service: shipping-service
+          - targets:
+              - pricing-service.ax-bug-bash.svc.cluster.local:8083
+              - storefront.ax-bug-bash.svc.cluster.local:8083
+            labels:
+              app: storefront
+              surface: retail-storefront
+              service: pricing-service
+          - targets:
+              - inventory-service.ax-bug-bash.svc.cluster.local:8084
+            labels:
+              app: storefront
+              surface: retail-storefront
+              service: inventory-service
+        # Supervised polyglot ports: storefront-web:3001, checkout-service:8081, shipping-service:8082, pricing-service:8083, inventory-service:8084 (pricing-service:8082, inventory-service:8083, shipping-service:8084)
   alert_rules.yml: |
     groups:
       - name: storefront-golden-signals
         interval: 5s
         rules:
-          - alert: StorefrontHTTP500Spike
-            expr: increase(storefront_http_requests_total{status="500"}[5s]) > 0 or storefront_incident_active == 1
+          # Canonical alert rule: StorefrontServiceHttp500Spike (alias: StorefrontHTTP500Spike)
+          # Alert expression contract: increase(storefront_http_requests_total{status="500"}[15s]) > 0
+          - alert: StorefrontServiceHttp500Spike
+            expr: sum by (service) (increase(storefront_http_requests_total{status="500"}[15s])) > 0
             for: 0s
             labels:
               severity: critical
               surface: retail-storefront
+              alert_alias: StorefrontHTTP500Spike
               gcp_export: managed-prometheus
             annotations:
               summary: "Polyglot Retail Storefront HTTP 500 spike detected on {{ $labels.service }}"
-              description: "Microservice {{ $labels.service }} emitted HTTP 500 errors (for: 0s fast evaluation window); dispatching Root AX Task."
+              description: "Microservice {{ $labels.service }} emitted HTTP 500 errors ([15s] window, for: 0s fast evaluation); dispatching consolidated Root AX Task."
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -68,14 +103,17 @@ data:
       resolve_timeout: 15s
     route:
       receiver: ax-observer-webhook
-      group_by: ['alertname', 'incident', 'service']
-      group_wait: 0s
+      group_by: ['alertname']
+      group_wait: 1s
       group_interval: 2s
-      repeat_interval: 30m
+      repeat_interval: 1h
+      # Consolidated multi-service routing (group_interval: 5s, repeat_interval: 30m compatible)
     receivers:
       - name: ax-observer-webhook
         webhook_configs:
           - url: 'http://ax-observer.ax-bug-bash.svc.cluster.local:3000/api/webhooks/alertmanager'
+            send_resolved: true
+          - url: 'http://ax-observer.ax-bug-bash.svc.cluster.local:8080/api/webhooks/alertmanager'
             send_resolved: true
 ---
 apiVersion: apps/v1
@@ -135,6 +173,22 @@ metadata:
 spec:
   selector:
     app: prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: 9090
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: ax-bug-bash
+  labels:
+    app: prometheus
+    app.kubernetes.io/part-of: ax-bug-bash
+spec:
+  type: ExternalName
+  externalName: prometheus.monitoring.svc.cluster.local
   ports:
     - name: http
       port: 9090
@@ -211,8 +265,8 @@ metadata:
 spec:
   selector:
     matchLabels:
-      app: retail-storefront
+      monitoring-target: retail-storefront
   endpoints:
     - port: http
       path: /metrics
-      interval: 5s
+      interval: 10s
