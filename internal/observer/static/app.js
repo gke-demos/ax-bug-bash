@@ -3,9 +3,19 @@
 
   var SVG_NS = "http://www.w3.org/2000/svg";
   var currentState = null;
+  var aboutCatalog = null;
   var selectedChildService = "";
   var selectedNodeType = "child"; // "root" or "child"
   var selectedHarnessMode = "multi";
+
+  // /about interactive state
+  var activeAboutTab = "topology"; // "topology" | "lifecycle" | "security"
+  var selectedAboutScenarioID = ""; // "" (All Healthy) or "INC-101".."INC-104"
+  var selectedTopologyNodeID = "ax-observer";
+  var activeLifecycleStepIdx = 0;
+  var lifecyclePlayTimer = null;
+  var selectedCascadeTierIdx = 0;
+  var selectedADRCategory = "ALL";
 
   function normalizeRoute(pathname) {
     if (pathname === "/workers" || pathname.indexOf("/workers/") === 0) {
@@ -41,6 +51,23 @@
         v.classList.remove("active");
       }
     });
+
+    if (route === "/about" && !aboutCatalog) {
+      fetchAboutCatalog();
+    }
+  }
+
+  function setAboutTab(tabName) {
+    activeAboutTab = tabName;
+    document.querySelectorAll(".about-tab-btn[data-about-tab]").forEach(function (btn) {
+      var isMatch = btn.getAttribute("data-about-tab") === tabName;
+      btn.classList.toggle("active", isMatch);
+      btn.setAttribute("aria-selected", isMatch ? "true" : "false");
+    });
+    document.querySelectorAll(".about-tab-panel[data-about-panel]").forEach(function (panel) {
+      var isMatch = panel.getAttribute("data-about-panel") === tabName;
+      panel.classList.toggle("active", isMatch);
+    });
   }
 
   function setTheme(theme) {
@@ -57,6 +84,20 @@
         btnDark.classList.remove("active");
       }
     }
+  }
+
+  function selectHarnessInModal(harness) {
+    var norm = harness || "multi";
+    selectedHarnessMode = norm;
+    document.querySelectorAll(".harness-option[data-harness]").forEach(function (b) {
+      b.classList.toggle("active", b.getAttribute("data-harness") === norm);
+    });
+  }
+
+  function highlightScenarioInModal(incidentID) {
+    document.querySelectorAll(".scenario-card[data-incident]").forEach(function (card) {
+      card.classList.toggle("active", card.getAttribute("data-incident") === incidentID);
+    });
   }
 
   function openCmdKModal() {
@@ -100,7 +141,6 @@
     }
     currentState = state;
 
-    // Update External Surface Links
     if (state.external_links) {
       var sfLink = document.getElementById("link-storefront");
       if (sfLink && state.external_links.storefront_url) {
@@ -112,7 +152,11 @@
       }
     }
 
-    // Update Model Gateway Badges
+    var execBadge = document.getElementById("badge-execution-mode");
+    if (execBadge && state.execution_mode) {
+      execBadge.textContent = state.execution_mode;
+    }
+
     if (state.gateway) {
       var provBadge = document.getElementById("badge-provenance");
       if (provBadge) {
@@ -128,6 +172,7 @@
     renderCenterTree(state);
     renderRightInspector(state);
     renderWorkersView(state);
+    updateAboutStatusStripFromState(state);
   }
 
   function renderLeftColumn(state) {
@@ -252,7 +297,6 @@
     var rootW = 240;
     var rootH = 98;
 
-    // Draw Bezier edges from Root Task to each Child Task
     children.forEach(function (child, idx) {
       var count = children.length;
       var slotH = 320 / Math.max(count, 1);
@@ -270,7 +314,6 @@
       svg.appendChild(createSvgEl("path", { d: d, class: "tree-edge" }));
     });
 
-    // Draw Root Task Node
     var rootGroup = createSvgEl("g", {
       transform: "translate(" + rootX + "," + rootY + ")",
       class: selectedNodeType === "root" ? "tree-node-group selected" : "tree-node-group",
@@ -294,7 +337,6 @@
     });
     svg.appendChild(rootGroup);
 
-    // Draw Child Task Nodes
     children.forEach(function (child, idx) {
       var count = children.length;
       var slotH = 320 / Math.max(count, 1);
@@ -373,7 +415,6 @@
       });
     }
 
-    // Update TDD Stepper for activeChild
     var completedPhases = {};
     if (Array.isArray(activeChild.tdd_steps)) {
       activeChild.tdd_steps.forEach(function (st) {
@@ -508,6 +549,604 @@
     }
   }
 
+  /* =========================================================================
+   * ROUTE 3: /about — 3-Tab Interactive SVG Architecture Experience
+   * ========================================================================= */
+
+  function updateAboutStatusStripFromState(state) {
+    if (!state) return;
+    var modeEl = document.getElementById("about-stat-mode");
+    var slotsEl = document.getElementById("about-stat-slots");
+    var harnessEl = document.getElementById("about-stat-harness");
+    var modelEl = document.getElementById("about-stat-model");
+    if (modeEl && state.execution_mode) {
+      modeEl.textContent = state.execution_mode;
+    }
+    if (slotsEl && state.worker_pool) {
+      var workers = state.worker_pool.workers || [];
+      var activeCount = state.worker_pool.active_tasks_count || 0;
+      slotsEl.textContent = workers.length + " Warm Slots / " + activeCount + " Active";
+    }
+    if (harnessEl && state.default_harness) {
+      harnessEl.textContent = state.default_harness;
+    }
+    if (modelEl && state.gateway) {
+      modelEl.textContent = (state.gateway.active_model || "gemini-3.8-flash") + " (" + (state.gateway.source_provenance || "FIXTURE") + ")";
+    }
+  }
+
+  function renderAboutExperience(catalog) {
+    if (!catalog) return;
+    aboutCatalog = catalog;
+
+    if (catalog.status_strip) {
+      var st = catalog.status_strip;
+      var modeEl = document.getElementById("about-stat-mode");
+      var slotsEl = document.getElementById("about-stat-slots");
+      var harnessEl = document.getElementById("about-stat-harness");
+      var modelEl = document.getElementById("about-stat-model");
+      var baseEl = document.getElementById("about-stat-baseline");
+      if (modeEl) modeEl.textContent = st.active_execution_mode || "SIMULATED";
+      if (slotsEl) slotsEl.textContent = st.warm_idle_slots + " Warm / " + st.active_sandbox_slots + " Active (" + st.reclaimed_warm_slots + " Reclaimed)";
+      if (harnessEl) harnessEl.textContent = st.default_harness || "multi";
+      if (modelEl) modelEl.textContent = (st.active_cascade_model || "gemini-3.8-flash") + " (" + (st.source_provenance || "FIXTURE") + ")";
+      if (baseEl) baseEl.textContent = (st.storefront_baseline_tag || "baseline-healthy") + " (< 10s Selective Reload)";
+    }
+
+    renderAboutTopologyTab(catalog);
+    renderAboutLifecycleTab(catalog);
+    renderAboutSecurityAndADRTab(catalog);
+  }
+
+  function renderAboutTopologyTab(catalog) {
+    var pillContainer = document.getElementById("about-scenario-pills");
+    if (pillContainer) {
+      pillContainer.replaceChildren();
+      var baseBtn = createEl(
+        "button",
+        selectedAboutScenarioID === "" ? "service-tab active" : "service-tab",
+        "All Healthy (Baseline)"
+      );
+      baseBtn.setAttribute("type", "button");
+      baseBtn.addEventListener("click", function () {
+        selectedAboutScenarioID = "";
+        renderAboutTopologyTab(catalog);
+      });
+      pillContainer.appendChild(baseBtn);
+
+      (catalog.scenarios || []).forEach(function (sc) {
+        var btn = createEl(
+          "button",
+          selectedAboutScenarioID === sc.incident_id ? "service-tab active" : "service-tab",
+          sc.incident_id + ": " + sc.implicated_services.join(" + ")
+        );
+        btn.setAttribute("type", "button");
+        btn.addEventListener("click", function () {
+          selectedAboutScenarioID = sc.incident_id;
+          if (sc.implicated_services && sc.implicated_services.length > 0) {
+            selectedTopologyNodeID = sc.implicated_services[0];
+          }
+          renderAboutTopologyTab(catalog);
+        });
+        pillContainer.appendChild(btn);
+      });
+    }
+
+    var activeScenario = null;
+    (catalog.scenarios || []).forEach(function (sc) {
+      if (sc.incident_id === selectedAboutScenarioID) {
+        activeScenario = sc;
+      }
+    });
+
+    var activeNodesMap = {};
+    var implicatedMap = {};
+    var activeEdgesMap = {};
+    if (activeScenario) {
+      (activeScenario.active_node_ids || []).forEach(function (id) { activeNodesMap[id] = true; });
+      (activeScenario.implicated_services || []).forEach(function (id) { implicatedMap[id] = true; });
+      (activeScenario.active_edge_ids || []).forEach(function (id) { activeEdgesMap[id] = true; });
+    }
+
+    var svg = document.getElementById("about-topology-svg");
+    if (svg) {
+      svg.replaceChildren();
+      svg.setAttribute("viewBox", "0 0 " + catalog.view_box.width + " " + catalog.view_box.height);
+
+      // 1. Render 4 Swimlanes
+      (catalog.swimlanes || []).forEach(function (lane) {
+        var laneGroup = createSvgEl("g", { class: "topo-swimlane" });
+        laneGroup.appendChild(createSvgEl("rect", {
+          x: 16,
+          y: lane.y,
+          width: catalog.view_box.width - 32,
+          height: lane.height,
+          rx: 10,
+          class: "topo-swimlane-rect",
+        }));
+        var laneTitle = createSvgEl("text", { x: 30, y: lane.y + 20, class: "topo-swimlane-title" });
+        laneTitle.textContent = lane.title + " — " + lane.subtitle;
+        laneGroup.appendChild(laneTitle);
+        svg.appendChild(laneGroup);
+      });
+
+      // 2. Render 11 Signal Edges + Pulse Circles
+      (catalog.edges || []).forEach(function (edge) {
+        var pts = edge.path_waypoints || [];
+        if (pts.length < 2) return;
+        var dParts = ["M " + pts[0].x + " " + pts[0].y];
+        for (var i = 1; i < pts.length; i++) {
+          dParts.push("L " + pts[i].x + " " + pts[i].y);
+        }
+        var dStr = dParts.join(" ");
+        var isEdgeActive = !activeScenario || activeEdgesMap[edge.id];
+        var edgeCls = isEdgeActive ? "topo-edge active" : "topo-edge dimmed";
+        var pathEl = createSvgEl("path", { id: edge.id, d: dStr, class: edgeCls });
+        svg.appendChild(pathEl);
+
+        if (isEdgeActive) {
+          var midIdx = Math.floor(pts.length / 2);
+          var pA = pts[midIdx - 1] || pts[0];
+          var pB = pts[midIdx] || pts[pts.length - 1];
+          var midX = Math.round((pA.x + pB.x) / 2);
+          var midY = Math.round((pA.y + pB.y) / 2);
+          var pulseDot = createSvgEl("circle", {
+            cx: midX,
+            cy: midY,
+            r: 4,
+            class: "topo-pulse-dot",
+          });
+          svg.appendChild(pulseDot);
+        }
+      });
+
+      // 3. Render 12 Interactive Topology Nodes
+      (catalog.nodes || []).forEach(function (node) {
+        var cls = "topo-node-group";
+        if (node.id === selectedTopologyNodeID) {
+          cls += " selected";
+        }
+        if (activeScenario) {
+          if (implicatedMap[node.id]) {
+            cls += " blast-implicated";
+          } else if (activeNodesMap[node.id]) {
+            cls += " blast-active";
+          } else {
+            cls += " blast-dimmed";
+          }
+        }
+
+        var g = createSvgEl("g", {
+          transform: "translate(" + node.x + "," + node.y + ")",
+          class: cls,
+          "data-node-id": node.id,
+        });
+        g.appendChild(createSvgEl("rect", {
+          x: 0,
+          y: 0,
+          width: node.width,
+          height: node.height,
+          rx: 9,
+          class: "topo-node-rect",
+        }));
+
+        var titleText = createSvgEl("text", { x: 12, y: 24, class: "tree-node-title" });
+        titleText.textContent = node.label;
+        var subText = createSvgEl("text", { x: 12, y: 44, class: "tree-node-sub" });
+        subText.textContent = node.sublabel;
+        var portText = createSvgEl("text", { x: 12, y: 64, class: "topo-node-port" });
+        portText.textContent = node.port + " · " + node.code_path;
+
+        g.appendChild(titleText);
+        g.appendChild(subText);
+        g.appendChild(portText);
+
+        g.addEventListener("click", function () {
+          selectedTopologyNodeID = node.id;
+          renderAboutTopologyTab(catalog);
+        });
+        svg.appendChild(g);
+      });
+    }
+
+    // Update Node & Scenario Inspector Panel
+    var selectedNode = (catalog.nodes || [])[0];
+    (catalog.nodes || []).forEach(function (n) {
+      if (n.id === selectedTopologyNodeID) {
+        selectedNode = n;
+      }
+    });
+
+    var titleEl = document.getElementById("inspector-node-title");
+    var badgesEl = document.getElementById("inspector-node-badges");
+    var descEl = document.getElementById("inspector-node-desc");
+    var capsEl = document.getElementById("inspector-node-caps");
+    var scBox = document.getElementById("inspector-scenario-box");
+    var scTitle = document.getElementById("inspector-scenario-title");
+    var scWhy = document.getElementById("inspector-scenario-why");
+    var launchBtn = document.getElementById("btn-launch-from-about");
+
+    if (selectedNode) {
+      if (titleEl) titleEl.textContent = selectedNode.label;
+      if (badgesEl) {
+        badgesEl.replaceChildren();
+        badgesEl.appendChild(createEl("span", "pill pill-accent", selectedNode.language));
+        badgesEl.appendChild(createEl("span", "pill pill-substrate", selectedNode.port));
+        badgesEl.appendChild(createEl("span", "pill", selectedNode.code_path));
+      }
+      if (descEl) descEl.textContent = selectedNode.description;
+      if (capsEl) {
+        capsEl.replaceChildren();
+        (selectedNode.key_capabilities || []).forEach(function (cap) {
+          capsEl.appendChild(createEl("li", "", cap));
+        });
+      }
+    }
+
+    if (scBox) {
+      if (activeScenario) {
+        scBox.classList.remove("hidden");
+        if (scTitle) {
+          scTitle.textContent = activeScenario.incident_id + " — " + activeScenario.title + " (" + activeScenario.error_code + ")";
+        }
+        if (scWhy) {
+          scWhy.textContent =
+            "Implicated: " + activeScenario.implicated_services.join(", ") +
+            " · Unaffected (Untouched): " + activeScenario.unaffected_services.join(", ") +
+            " · Why CI Missed It: " + activeScenario.why_ci_missed_it;
+        }
+        if (launchBtn) {
+          launchBtn.onclick = function () {
+            selectHarnessInModal(activeScenario.recommended_harness || "multi");
+            highlightScenarioInModal(activeScenario.incident_id);
+            applyRoute("/", true);
+            openCmdKModal();
+          };
+        }
+      } else {
+        scBox.classList.add("hidden");
+      }
+    }
+  }
+
+  function renderAboutLifecycleTab(catalog) {
+    var stages = catalog.lifecycle_stages || [];
+    if (stages.length === 0) return;
+    if (activeLifecycleStepIdx < 0 || activeLifecycleStepIdx >= stages.length) {
+      activeLifecycleStepIdx = 0;
+    }
+    var stage = stages[activeLifecycleStepIdx];
+
+    var pillsEl = document.getElementById("lifecycle-stage-pills");
+    if (pillsEl) {
+      pillsEl.replaceChildren();
+      stages.forEach(function (st, idx) {
+        var btn = createEl(
+          "button",
+          idx === activeLifecycleStepIdx ? "lifecycle-pill active" : "lifecycle-pill",
+          st.title
+        );
+        btn.setAttribute("type", "button");
+        btn.addEventListener("click", function () {
+          stopLifecycleAutoPlay();
+          activeLifecycleStepIdx = idx;
+          renderAboutLifecycleTab(catalog);
+        });
+        pillsEl.appendChild(btn);
+      });
+    }
+
+    var svg = document.getElementById("about-lifecycle-svg");
+    if (svg) {
+      svg.replaceChildren();
+      // Top row: 6 stage pipeline boxes
+      stages.forEach(function (st, idx) {
+        var boxX = 16 + idx * 182;
+        var boxY = 22;
+        var boxW = 170;
+        var boxH = 88;
+        var isCurrent = idx === activeLifecycleStepIdx;
+        var isPast = idx < activeLifecycleStepIdx;
+        var cls = "lc-stage-node";
+        if (isCurrent) cls += " active";
+        else if (isPast) cls += " completed";
+
+        var g = createSvgEl("g", { transform: "translate(" + boxX + "," + boxY + ")", class: cls });
+        g.appendChild(createSvgEl("rect", { x: 0, y: 0, width: boxW, height: boxH, rx: 9, class: "topo-node-rect" }));
+        var t1 = createSvgEl("text", { x: 12, y: 26, class: "tree-node-title" });
+        t1.textContent = "Step " + st.step_number;
+        var t2 = createSvgEl("text", { x: 12, y: 48, class: "tree-node-sub" });
+        t2.textContent = st.title.replace(/^[0-9]+\.\s*/, "").slice(0, 24);
+        var t3 = createSvgEl("text", { x: 12, y: 68, class: "topo-node-port" });
+        t3.textContent = "Root: " + st.root_task_phase;
+        g.appendChild(t1);
+        g.appendChild(t2);
+        g.appendChild(t3);
+        g.addEventListener("click", function () {
+          stopLifecycleAutoPlay();
+          activeLifecycleStepIdx = idx;
+          renderAboutLifecycleTab(catalog);
+        });
+        svg.appendChild(g);
+
+        if (idx < stages.length - 1) {
+          var arrowX1 = boxX + boxW;
+          var arrowX2 = boxX + 182;
+          svg.appendChild(createSvgEl("path", {
+            d: "M " + arrowX1 + " 66 L " + arrowX2 + " 66",
+            class: idx <= activeLifecycleStepIdx ? "topo-edge active" : "topo-edge dimmed",
+          }));
+        }
+      });
+
+      // Bottom row: 4 Warm gVisor Worker Slots at this stage
+      var slotTitle = createSvgEl("text", { x: 20, y: 155, class: "topo-swimlane-title" });
+      slotTitle.textContent = "Agent Substrate v0.6.0 Warm Sandbox Slot Transitions (Step " + stage.step_number + " — Child Phase: " + stage.child_task_phase + ")";
+      svg.appendChild(slotTitle);
+
+      (stage.slot_states || []).forEach(function (sl, sIdx) {
+        var sx = 20 + sIdx * 272;
+        var sy = 175;
+        var sw = 256;
+        var sh = 128;
+        var slCls = "lc-slot-group " + sl.state.toLowerCase();
+        var sg = createSvgEl("g", { transform: "translate(" + sx + "," + sy + ")", class: slCls });
+        sg.appendChild(createSvgEl("rect", { x: 0, y: 0, width: sw, height: sh, rx: 10, class: "topo-node-rect" }));
+        var stName = createSvgEl("text", { x: 14, y: 28, class: "tree-node-title" });
+        stName.textContent = sl.slot_id;
+        var stState = createSvgEl("text", { x: 14, y: 52, class: "arch-edge-label" });
+        stState.textContent = "State: " + sl.state;
+        var stRole = createSvgEl("text", { x: 14, y: 76, class: "tree-node-sub" });
+        stRole.textContent = sl.task_role;
+        var stHarness = createSvgEl("text", { x: 14, y: 100, class: "topo-node-port" });
+        stHarness.textContent = "Harness: " + sl.harness + " · SNAPSHOT_FIDELITY_VOLUMES";
+        sg.appendChild(stName);
+        sg.appendChild(stState);
+        sg.appendChild(stRole);
+        sg.appendChild(stHarness);
+        svg.appendChild(sg);
+      });
+    }
+
+    var subEl = document.getElementById("lc-stage-subtitle");
+    var titleEl = document.getElementById("lc-stage-title");
+    var sumEl = document.getElementById("lc-stage-summary");
+    var badgesEl = document.getElementById("lc-slot-badges");
+    var protoLabelEl = document.getElementById("lc-protocol-label");
+    var protoPreEl = document.getElementById("lc-protocol-payload");
+
+    if (subEl) subEl.textContent = "Stage " + stage.step_number + " of " + stages.length + " · " + stage.subtitle;
+    if (titleEl) titleEl.textContent = stage.title;
+    if (sumEl) sumEl.textContent = stage.summary;
+    if (badgesEl) {
+      badgesEl.replaceChildren();
+      badgesEl.appendChild(createEl("span", "pill pill-accent", "Root Task: " + stage.root_task_phase));
+      badgesEl.appendChild(createEl("span", "pill pill-substrate", "Child Tasks: " + stage.child_task_phase));
+    }
+    if (protoLabelEl) protoLabelEl.textContent = stage.protocol_label;
+    if (protoPreEl) {
+      try {
+        protoPreEl.textContent = JSON.stringify(JSON.parse(stage.protocol_payload_preview), null, 2);
+      } catch (e) {
+        protoPreEl.textContent = stage.protocol_payload_preview || "{}";
+      }
+    }
+  }
+
+  function stopLifecycleAutoPlay() {
+    if (lifecyclePlayTimer) {
+      window.clearInterval(lifecyclePlayTimer);
+      lifecyclePlayTimer = null;
+    }
+    var playBtn = document.getElementById("btn-lc-play");
+    if (playBtn) playBtn.textContent = "Auto-Play";
+  }
+
+  function toggleLifecycleAutoPlay() {
+    if (!aboutCatalog) return;
+    if (lifecyclePlayTimer) {
+      stopLifecycleAutoPlay();
+      return;
+    }
+    var playBtn = document.getElementById("btn-lc-play");
+    if (playBtn) playBtn.textContent = "Pause";
+    lifecyclePlayTimer = window.setInterval(function () {
+      var stages = (aboutCatalog && aboutCatalog.lifecycle_stages) || [];
+      if (stages.length === 0) return;
+      activeLifecycleStepIdx = (activeLifecycleStepIdx + 1) % stages.length;
+      renderAboutLifecycleTab(aboutCatalog);
+    }, 2200);
+  }
+
+  function renderAboutSecurityAndADRTab(catalog) {
+    var cascadeModels = catalog.cascade_models || [];
+    var tierSelector = document.getElementById("cascade-tier-selector");
+    if (tierSelector) {
+      tierSelector.replaceChildren();
+      cascadeModels.forEach(function (m, idx) {
+        var btn = createEl(
+          "button",
+          idx === selectedCascadeTierIdx ? "service-tab active" : "service-tab",
+          "Tier " + m.tier + ": " + m.model_id
+        );
+        btn.setAttribute("type", "button");
+        btn.addEventListener("click", function () {
+          selectedCascadeTierIdx = idx;
+          renderAboutSecurityAndADRTab(catalog);
+        });
+        tierSelector.appendChild(btn);
+      });
+    }
+
+    var secSvg = document.getElementById("about-security-svg");
+    if (secSvg) {
+      secSvg.replaceChildren();
+      // Hop 1: Airgapped gVisor Sandbox
+      var box1 = createSvgEl("g", { transform: "translate(20, 35)" });
+      box1.appendChild(createSvgEl("rect", { x: 0, y: 0, width: 290, height: 220, rx: 10, class: "topo-node-rect" }));
+      var b1t = createSvgEl("text", { x: 16, y: 30, class: "tree-node-title" });
+      b1t.textContent = "1. Airgapped gVisor Sandbox (ateworker)";
+      var b1s1 = createSvgEl("text", { x: 16, y: 56, class: "tree-node-sub" });
+      b1s1.textContent = "• Zero GCP SA keys or OAuth tokens in env";
+      var b1s2 = createSvgEl("text", { x: 16, y: 80, class: "tree-node-sub" });
+      b1s2.textContent = "• Holds scoped TaskSessionToken only";
+      var b1s3 = createSvgEl("text", { x: 16, y: 104, class: "tree-node-sub" });
+      b1s3.textContent = "• OpenFGA Tuple: task:child#owner@task:root";
+      var b1s4 = createSvgEl("text", { x: 16, y: 128, class: "topo-node-port" });
+      b1s4.textContent = "Harnesses: antigravity | opencode | pi";
+      box1.appendChild(b1t);
+      box1.appendChild(b1s1);
+      box1.appendChild(b1s2);
+      box1.appendChild(b1s3);
+      box1.appendChild(b1s4);
+      secSvg.appendChild(box1);
+
+      secSvg.appendChild(createSvgEl("path", { d: "M 310 145 L 380 145", class: "topo-edge active" }));
+      var hop1Lbl = createSvgEl("text", { x: 316, y: 132, class: "arch-edge-label" });
+      hop1Lbl.textContent = "Hop 1: Task Token";
+      secSvg.appendChild(hop1Lbl);
+
+      // Hop 2: Zero-Secret Model Gateway
+      var box2 = createSvgEl("g", { transform: "translate(380, 35)" });
+      box2.appendChild(createSvgEl("rect", { x: 0, y: 0, width: 310, height: 220, rx: 10, class: "topo-node-rect" }));
+      var b2t = createSvgEl("text", { x: 16, y: 30, class: "tree-node-title" });
+      b2t.textContent = "2. Zero-Secret Model Gateway (:8090)";
+      var b2s1 = createSvgEl("text", { x: 16, y: 56, class: "tree-node-sub" });
+      b2s1.textContent = "• Validates TaskSessionToken & task_name";
+      var b2s2 = createSvgEl("text", { x: 16, y: 80, class: "tree-node-sub" });
+      b2s2.textContent = "• Normalizes google-genai & openai-compat";
+      var b2s3 = createSvgEl("text", { x: 16, y: 104, class: "tree-node-sub" });
+      b2s3.textContent = "• Attaches GKE Workload Identity OAuth2";
+      var b2s4 = createSvgEl("text", { x: 16, y: 128, class: "topo-node-port" });
+      b2s4.textContent = "Compute Obtainability: 4-Tier Cascade";
+      box2.appendChild(b2t);
+      box2.appendChild(b2s1);
+      box2.appendChild(b2s2);
+      box2.appendChild(b2s3);
+      box2.appendChild(b2s4);
+      secSvg.appendChild(box2);
+
+      secSvg.appendChild(createSvgEl("path", { d: "M 690 145 L 760 145", class: "topo-edge active" }));
+      var hop2Lbl = createSvgEl("text", { x: 696, y: 132, class: "arch-edge-label" });
+      hop2Lbl.textContent = "Hop 2: Workload ID";
+      secSvg.appendChild(hop2Lbl);
+
+      // Hop 3: 4-Tier Gemini Flash Cascade on Agent Platform
+      cascadeModels.forEach(function (cm, idx) {
+        var cy = 35 + idx * 56;
+        var isSelectedTier = idx === selectedCascadeTierIdx;
+        var is429Simulated = idx < selectedCascadeTierIdx;
+        var cg = createSvgEl("g", {
+          transform: "translate(760," + cy + ")",
+          class: isSelectedTier ? "lc-stage-node active" : "lc-stage-node",
+        });
+        cg.appendChild(createSvgEl("rect", { x: 0, y: 0, width: 340, height: 48, rx: 8, class: "topo-node-rect" }));
+        var ct1 = createSvgEl("text", { x: 12, y: 20, class: "tree-node-title" });
+        ct1.textContent = "Tier " + cm.tier + ": " + cm.model_id;
+        var ct2 = createSvgEl("text", { x: 12, y: 38, class: "tree-node-sub" });
+        if (is429Simulated) {
+          ct2.textContent = "HTTP 429 / 503 Quota Exhausted -> Failover Next Tier";
+        } else if (isSelectedTier) {
+          ct2.textContent = "ACTIVE SERVING TIER (" + cm.latency_target_ms + "ms target)";
+        } else {
+          ct2.textContent = "Standby Fallback Tier (" + cm.latency_target_ms + "ms)";
+        }
+        cg.appendChild(ct1);
+        cg.appendChild(ct2);
+        cg.addEventListener("click", function () {
+          selectedCascadeTierIdx = idx;
+          renderAboutSecurityAndADRTab(catalog);
+        });
+        secSvg.appendChild(cg);
+      });
+    }
+
+    // Render 3 Coding Harness Cards
+    var harnessGrid = document.getElementById("about-harnesses-grid");
+    if (harnessGrid) {
+      harnessGrid.replaceChildren();
+      (catalog.harnesses || []).forEach(function (h) {
+        var card = createEl("div", "worker-card");
+        var top = createEl("div", "worker-header");
+        top.appendChild(createEl("strong", "service-name", h.display_name + " (" + h.id + ")"));
+        top.appendChild(createEl("span", "pill pill-accent", h.wire_protocol));
+        card.appendChild(top);
+        card.appendChild(createEl("div", "service-lang", h.strength_summary));
+        card.appendChild(createEl("div", "service-lang", "Binary: " + h.binary_path + " · Auth: " + h.auth_header));
+        var cmdPre = createEl("pre", "code-block", h.command_template);
+        card.appendChild(cmdPre);
+        harnessGrid.appendChild(card);
+      });
+    }
+
+    // Render Filterable 11-ADR Catalog
+    var adrs = catalog.adrs || [];
+    var filterBar = document.getElementById("adr-category-filters");
+    if (filterBar) {
+      filterBar.replaceChildren();
+      var categories = ["ALL"];
+      adrs.forEach(function (a) {
+        if (a.category && categories.indexOf(a.category) === -1) {
+          categories.push(a.category);
+        }
+      });
+      categories.forEach(function (cat) {
+        var btn = createEl(
+          "button",
+          selectedADRCategory === cat ? "service-tab active" : "service-tab",
+          cat === "ALL" ? "All ADRs (" + adrs.length + ")" : cat
+        );
+        btn.setAttribute("type", "button");
+        btn.addEventListener("click", function () {
+          selectedADRCategory = cat;
+          renderAboutSecurityAndADRTab(catalog);
+        });
+        filterBar.appendChild(btn);
+      });
+    }
+
+    var adrGrid = document.getElementById("about-adr-grid");
+    if (adrGrid) {
+      adrGrid.replaceChildren();
+      adrs.forEach(function (adr) {
+        if (selectedADRCategory !== "ALL" && adr.category !== selectedADRCategory) {
+          return;
+        }
+        var card = createEl("article", "adr-card");
+        var header = createEl("div", "worker-header");
+        header.appendChild(createEl("span", "pill pill-accent", adr.id + " · " + adr.category));
+        header.appendChild(createEl("span", "pill pill-healed", adr.status));
+        card.appendChild(header);
+
+        card.appendChild(createEl("strong", "service-name", adr.title));
+        card.appendChild(createEl("div", "service-lang", "File: docs/adr/" + adr.filename));
+        card.appendChild(createEl("p", "inspector-desc", adr.summary));
+
+        var ul = createEl("ul", "inspector-list");
+        (adr.key_decisions || []).forEach(function (d) {
+          ul.appendChild(createEl("li", "", d));
+        });
+        card.appendChild(ul);
+
+        var countersBar = createEl("div", "about-pill-bar");
+        var rc = adr.runtime_counters || {};
+        Object.keys(rc).forEach(function (k) {
+          countersBar.appendChild(createEl("span", "pill", k + ": " + rc[k]));
+        });
+        card.appendChild(countersBar);
+
+        adrGrid.appendChild(card);
+      });
+    }
+  }
+
+  function fetchAboutCatalog() {
+    fetch("/api/about/catalog")
+      .then(function (r) { return r.json(); })
+      .then(function (data) { renderAboutExperience(data); })
+      .catch(function () {});
+  }
+
   function fetchState() {
     fetch("/api/state")
       .then(function (r) { return r.json(); })
@@ -547,7 +1186,7 @@
       return;
     }
     var es = new window.EventSource("/api/events");
-    var refreshEvents = ["state.snapshot", "alert.fired", "tree.updated", "child.tdd_step", "worker.updated", "rollout.completed"];
+    var refreshEvents = ["state.snapshot", "alert.fired", "tree.updated", "child.tdd_step", "worker.updated", "rollout.completed", "observer.event"];
     refreshEvents.forEach(function (evtName) {
       es.addEventListener(evtName, function (ev) {
         if (evtName === "state.snapshot" && ev.data) {
@@ -576,6 +1215,46 @@
         applyRoute(target, true);
       });
     });
+
+    document.querySelectorAll(".about-tab-btn[data-about-tab]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var tab = btn.getAttribute("data-about-tab") || "topology";
+        setAboutTab(tab);
+      });
+    });
+
+    var btnLcPrev = document.getElementById("btn-lc-prev");
+    var btnLcPlay = document.getElementById("btn-lc-play");
+    var btnLcNext = document.getElementById("btn-lc-next");
+    var btnLcReset = document.getElementById("btn-lc-reset");
+    if (btnLcPrev) {
+      btnLcPrev.addEventListener("click", function () {
+        stopLifecycleAutoPlay();
+        if (!aboutCatalog || !aboutCatalog.lifecycle_stages) return;
+        var len = aboutCatalog.lifecycle_stages.length;
+        activeLifecycleStepIdx = (activeLifecycleStepIdx - 1 + len) % len;
+        renderAboutLifecycleTab(aboutCatalog);
+      });
+    }
+    if (btnLcPlay) {
+      btnLcPlay.addEventListener("click", toggleLifecycleAutoPlay);
+    }
+    if (btnLcNext) {
+      btnLcNext.addEventListener("click", function () {
+        stopLifecycleAutoPlay();
+        if (!aboutCatalog || !aboutCatalog.lifecycle_stages) return;
+        var len = aboutCatalog.lifecycle_stages.length;
+        activeLifecycleStepIdx = (activeLifecycleStepIdx + 1) % len;
+        renderAboutLifecycleTab(aboutCatalog);
+      });
+    }
+    if (btnLcReset) {
+      btnLcReset.addEventListener("click", function () {
+        stopLifecycleAutoPlay();
+        activeLifecycleStepIdx = 0;
+        if (aboutCatalog) renderAboutLifecycleTab(aboutCatalog);
+      });
+    }
 
     var btnDark = document.getElementById("btn-theme-dark");
     var btnLight = document.getElementById("btn-theme-light");
@@ -607,10 +1286,7 @@
 
     document.querySelectorAll(".harness-option[data-harness]").forEach(function (btn) {
       btn.addEventListener("click", function () {
-        selectedHarnessMode = btn.getAttribute("data-harness") || "multi";
-        document.querySelectorAll(".harness-option[data-harness]").forEach(function (b) {
-          b.classList.toggle("active", b === btn);
-        });
+        selectHarnessInModal(btn.getAttribute("data-harness") || "multi");
       });
     });
 
@@ -634,6 +1310,7 @@
     }
 
     fetchState();
+    fetchAboutCatalog();
     initSSE();
   });
 })();

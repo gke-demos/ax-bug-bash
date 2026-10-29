@@ -6,6 +6,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"github.com/gke-demos/ax-bug-bash/internal/httputil"
 	"github.com/gke-demos/ax-bug-bash/internal/monitoring"
 	"github.com/gke-demos/ax-bug-bash/internal/storefront"
+	"github.com/gke-demos/ax-bug-bash/internal/substrate"
 	"github.com/google/ax/pkg/apis/v1alpha1"
 )
 
@@ -33,10 +35,13 @@ type Config struct {
 	GrafanaPublicURL    string
 	ModelGateway        *gateway.Server
 	ModelGatewayURL     string
+	GatewayClient       *gateway.Client
+	SubstrateViewer     *substrate.Viewer
 	Orchestrator        *bugbash.Orchestrator
 	AlertmanagerBridge  *monitoring.AlertmanagerBridge
 	RolloutBridge       *monitoring.RolloutBridge
 	Scraper             *monitoring.Scraper
+	DefaultHarness      string
 	HTTPClient          *http.Client
 }
 
@@ -113,12 +118,14 @@ type ObserverChildTaskView struct {
 // ObserverTreeView represents an active or historical Bug Bash Tree execution formatted for the AX Observer UI.
 type ObserverTreeView struct {
 	ExecutionID        string                  `json:"execution_id"`
+	ExecutionMode      string                  `json:"execution_mode,omitempty"`
 	IncidentID         string                  `json:"incident_id"`
 	Title              string                  `json:"title"`
 	Summary            string                  `json:"summary"`
 	WhyCIMissedIt      string                  `json:"why_ci_missed_it"`
 	HarnessMode        string                  `json:"harness_mode"`
 	RequestedModel     string                  `json:"requested_model"`
+	SourceProvenance   string                  `json:"source_provenance,omitempty"`
 	Phase              string                  `json:"phase"`
 	RootTask           ObserverRootTaskView    `json:"root_task"`
 	ImplicatedServices []string                `json:"implicated_services"`
@@ -146,6 +153,8 @@ type VolumeSnapshotRecord struct {
 
 // StateSnapshot is the unified response returned by GET /api/state and streamed over GET /api/events.
 type StateSnapshot struct {
+	ExecutionMode   string                           `json:"execution_mode"`
+	DefaultHarness  string                           `json:"default_harness"`
 	ExternalLinks   ExternalSurfaceLinks             `json:"external_links"`
 	Gateway         GatewayStatusSummary             `json:"gateway"`
 	Services        []PolyglotServiceHealth          `json:"services"`
@@ -168,11 +177,23 @@ type TriggerIncidentRequest struct {
 	Model      string `json:"model,omitempty"`
 }
 
+// WorkersResponse is returned by GET /api/workers.
+type WorkersResponse struct {
+	bugbash.WorkerPoolSummary
+	ExecutionMode   string                 `json:"execution_mode"`
+	ReadyWarmSlots  int                    `json:"ready_warm_slots"`
+	AllocatedSlots  int                    `json:"allocated_slots"`
+	SuspendedSlots  int                    `json:"suspended_slots"`
+	VolumeSnapshots []VolumeSnapshotRecord `json:"volume_snapshots"`
+}
+
 // Server is the AX Observer HTTP server (:3000).
 type Server struct {
 	cfg                Config
 	storefront         *storefront.Runtime
 	gateway            *gateway.Server
+	gatewayClient      *gateway.Client
+	substrateViewer    *substrate.Viewer
 	embeddedGatewaySrv *http.Server
 	embeddedGatewayLis net.Listener
 	orchestrator       *bugbash.Orchestrator
@@ -183,7 +204,9 @@ type Server struct {
 	sse                *SSEBroker
 	httpClient         *http.Client
 
-	mu sync.RWMutex
+	mu                sync.RWMutex
+	defaultHarness    string
+	configuredHarness string
 }
 
 // NewServer initializes the AX Observer server and wires default in-memory components when omitted.
@@ -193,6 +216,14 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 	}
 	if strings.TrimSpace(cfg.GrafanaPublicURL) == "" {
 		cfg.GrafanaPublicURL = httputil.EnvOr("GRAFANA_PUBLIC_URL", "http://localhost:3002/monitoring")
+	}
+
+	defaultHarness := strings.ToLower(strings.TrimSpace(cfg.DefaultHarness))
+	if defaultHarness == "" {
+		defaultHarness = strings.ToLower(strings.TrimSpace(httputil.EnvOr("DEFAULT_HARNESS", "multi")))
+	}
+	if !isValidHarnessMode(defaultHarness) {
+		defaultHarness = "multi"
 	}
 
 	client := cfg.HTTPClient
@@ -219,6 +250,7 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 		embeddedGWLis net.Listener
 	)
 	gwURL := strings.TrimSpace(cfg.ModelGatewayURL)
+	hasExplicitRemoteGW := gwURL != ""
 	if gwURL == "" {
 		lis, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
@@ -232,13 +264,21 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 		gwURL = "http://" + lis.Addr().String()
 	}
 
+	gwClient := cfg.GatewayClient
+	if gwClient == nil && hasExplicitRemoteGW {
+		gwClient = gateway.NewClient(gwURL, client)
+	}
+
 	s := &Server{
 		cfg:                cfg,
 		storefront:         sf,
 		gateway:            gw,
+		gatewayClient:      gwClient,
+		substrateViewer:    cfg.SubstrateViewer,
 		embeddedGatewaySrv: embeddedGWSrv,
 		embeddedGatewayLis: embeddedGWLis,
 		httpClient:         client,
+		defaultHarness:     defaultHarness,
 	}
 	s.sse = NewSSEBroker(func() any {
 		return s.BuildStateSnapshot(context.Background())
@@ -248,12 +288,19 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 	ownsOrch := false
 	if orch == nil {
 		createdOrch, err := bugbash.NewOrchestrator(ctx, bugbash.OrchestratorConfig{
-			Storefront:      sf,
-			ModelGateway:    gw,
-			ModelGatewayURL: gwURL,
+			Storefront:         sf,
+			ModelGateway:       gw,
+			ModelGatewayURL:    gwURL,
+			GatewayClient:      gwClient,
+			SubstrateViewer:    cfg.SubstrateViewer,
+			DefaultHarnessMode: defaultHarness,
 			OnRolloutCompleted: func(tree *bugbash.BugBashTreeExecution) {
 				s.sse.Broadcast("tree.updated", tree)
 				s.sse.Broadcast("worker.updated", s.workerPoolSnapshot())
+			},
+			OnObserverEvent: func(ev bugbash.ObserverCallbackEvent, tree *bugbash.BugBashTreeExecution) {
+				s.sse.Broadcast("observer.event", ev)
+				s.sse.Broadcast("tree.updated", tree)
 			},
 		})
 		if err != nil {
@@ -267,6 +314,12 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 	}
 	s.orchestrator = orch
 	s.ownsOrchestrator = ownsOrch
+	if s.substrateViewer == nil && orch != nil && orch.SubstrateViewer() != nil {
+		s.substrateViewer = orch.SubstrateViewer()
+	}
+	if s.gatewayClient == nil && hasExplicitRemoteGW && orch != nil && orch.GatewayClient() != nil {
+		s.gatewayClient = orch.GatewayClient()
+	}
 
 	rb := cfg.RolloutBridge
 	ab := cfg.AlertmanagerBridge
@@ -275,6 +328,7 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 			Storefront:    sf,
 			StorefrontURL: cfg.StorefrontURL,
 			Orchestrator:  orch,
+			HarnessMode:   defaultHarness,
 			HTTPClient:    client,
 			OnAlertUpdated: func(alert monitoring.EnrichedAlertRecord) {
 				s.sse.Broadcast("alert.fired", alert)
@@ -289,7 +343,11 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 			HTTPClient:         client,
 		})
 	}
-	ab.SetRolloutBridge(rb)
+	// In SIMULATED mode, AlertmanagerBridge triggers RolloutBridge synchronously after TriggerIncidentBugBash.
+	// In LIVE_GKE mode, RolloutBridge runs when the root.merged callback arrives so alerts stay firing during sandbox execution.
+	if orch == nil || orch.ExecutionMode() != bugbash.ExecutionModeLiveGKE {
+		ab.SetRolloutBridge(rb)
+	}
 	s.alertBridge = ab
 	s.rolloutBridge = rb
 
@@ -346,6 +404,49 @@ func (s *Server) Orchestrator() *bugbash.Orchestrator {
 	return s.orchestrator
 }
 
+// ExecutionMode returns "LIVE_GKE" or "SIMULATED".
+func (s *Server) ExecutionMode() string {
+	if s.orchestrator != nil && s.orchestrator.ExecutionMode() != "" {
+		return string(s.orchestrator.ExecutionMode())
+	}
+	return string(bugbash.ExecutionModeSimulated)
+}
+
+// DefaultHarness returns the active default coding harness ("antigravity", "opencode", "pi", or "multi").
+func (s *Server) DefaultHarness() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.configuredHarness != "" {
+		return s.configuredHarness
+	}
+	if s.defaultHarness != "" {
+		return s.defaultHarness
+	}
+	return "multi"
+}
+
+// SetDefaultHarness updates the runtime default coding harness.
+func (s *Server) SetDefaultHarness(harness string) error {
+	normalized := strings.ToLower(strings.TrimSpace(harness))
+	if !isValidHarnessMode(normalized) {
+		return fmt.Errorf("unsupported harness %q (must be antigravity, opencode, pi, or multi)", harness)
+	}
+	s.mu.Lock()
+	s.defaultHarness = normalized
+	s.configuredHarness = normalized
+	s.mu.Unlock()
+	return nil
+}
+
+func isValidHarnessMode(h string) bool {
+	switch strings.ToLower(strings.TrimSpace(h)) {
+	case "antigravity", "opencode", "pi", "multi":
+		return true
+	default:
+		return false
+	}
+}
+
 // Handler returns the HTTP handler for the AX Observer (:3000).
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -361,10 +462,15 @@ func (s *Server) Handler() http.Handler {
 	})
 
 	mux.HandleFunc("/api/state", s.handleGetState)
+	mux.HandleFunc("/api/workers", s.handleGetWorkers)
+	mux.HandleFunc("/api/about/catalog", s.handleGetAboutCatalog)
+	mux.HandleFunc("/api/config/harness", s.handleConfigHarness)
 	mux.Handle("/api/events", s.sse)
 	mux.HandleFunc("/api/webhooks/alertmanager", s.handleAlertmanagerWebhook)
 	mux.HandleFunc("/api/incidents/trigger", s.handleTriggerIncident)
 	mux.HandleFunc("/api/incidents/reset", s.handleResetIncidents)
+	mux.HandleFunc("/api/observer/events", s.handleObserverCallback)
+	mux.HandleFunc("/api/internal/observer-events", s.handleObserverCallback)
 	mux.HandleFunc("/api/observer/callback", s.handleObserverCallback)
 
 	// Path-based SPA routes (/, /workers, /about)
@@ -378,6 +484,12 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) handleSPAIndex(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if r.URL.Query().Has("view") || strings.Contains(strings.ToLower(r.URL.RawQuery), "view=") {
+		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "query-parameter view routing (?view=...) is forbidden; use path routing (/, /workers, /about)",
+		})
 		return
 	}
 	switch r.URL.Path {
@@ -405,6 +517,113 @@ func (s *Server) handleGetState(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, snap)
 }
 
+func (s *Server) handleGetWorkers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	snap := s.BuildStateSnapshot(r.Context())
+	pool := snap.WorkerPool
+	readyWarm := 0
+	allocated := 0
+	suspended := 0
+	for _, node := range pool.Workers {
+		switch node.Status {
+		case "ACTIVE_SANDBOX":
+			allocated++
+		case "RECLAIMED_WARM":
+			suspended++
+			readyWarm++
+		default:
+			readyWarm++
+		}
+	}
+	httputil.WriteJSON(w, http.StatusOK, WorkersResponse{
+		WorkerPoolSummary: pool,
+		ExecutionMode:     s.ExecutionMode(),
+		ReadyWarmSlots:    readyWarm,
+		AllocatedSlots:    allocated,
+		SuspendedSlots:    suspended,
+		VolumeSnapshots:   snap.VolumeSnapshots,
+	})
+}
+
+func (s *Server) handleGetAboutCatalog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	snap := s.BuildStateSnapshot(r.Context())
+	warmIdle := 0
+	activeSandbox := 0
+	reclaimedWarm := 0
+	for _, node := range snap.WorkerPool.Workers {
+		switch node.Status {
+		case "ACTIVE_SANDBOX":
+			activeSandbox++
+		case "RECLAIMED_WARM":
+			reclaimedWarm++
+			warmIdle++
+		default:
+			warmIdle++
+		}
+	}
+	if len(snap.WorkerPool.Workers) == 0 {
+		warmIdle = 4
+	}
+	cat := BuildArchitectureTopologyCatalog(CatalogRuntimeTelemetry{
+		ActiveExecutionMode:   s.ExecutionMode(),
+		DefaultHarness:        s.DefaultHarness(),
+		LiveWorkerSlots:       maxInt(len(snap.WorkerPool.Workers), 4),
+		WarmIdleSlots:         warmIdle,
+		ActiveSandboxSlots:    activeSandbox,
+		ReclaimedWarmSlots:    maxInt(reclaimedWarm, snap.WorkerPool.TotalReclaimedSlots),
+		GatewaySessionsCount:  len(snap.Gateway.Sessions),
+		ActiveCascadeModel:    snap.Gateway.ActiveModel,
+		SourceProvenance:      snap.Gateway.SourceProvenance,
+		StorefrontBaselineTag: "baseline-healthy",
+		ActiveTreesCount:      len(snap.Trees),
+	})
+	httputil.WriteJSON(w, http.StatusOK, cat)
+}
+
+func (s *Server) handleConfigHarness(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		httputil.WriteJSON(w, http.StatusOK, map[string]any{
+			"default_harness":     s.DefaultHarness(),
+			"supported_harnesses": []string{"antigravity", "opencode", "pi", "multi"},
+			"execution_mode":      s.ExecutionMode(),
+		})
+	case http.MethodPost, http.MethodPut:
+		var body struct {
+			DefaultHarness string `json:"default_harness"`
+			Harness        string `json:"harness"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+			return
+		}
+		target := strings.TrimSpace(body.DefaultHarness)
+		if target == "" {
+			target = strings.TrimSpace(body.Harness)
+		}
+		if err := s.SetDefaultHarness(target); err != nil {
+			httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		snap := s.BuildStateSnapshot(r.Context())
+		s.sse.Broadcast("state.snapshot", snap)
+		httputil.WriteJSON(w, http.StatusOK, map[string]any{
+			"status":          "updated",
+			"default_harness": s.DefaultHarness(),
+			"execution_mode":  s.ExecutionMode(),
+		})
+	default:
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 func (s *Server) handleAlertmanagerWebhook(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -420,10 +639,20 @@ func (s *Server) handleAlertmanagerWebhook(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	s.applyRuntimeHarnessToWebhook(&payload)
+
 	resp, err := s.alertBridge.ProcessWebhook(r.Context(), payload)
 	if err != nil {
 		httputil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+
+	waitSync := isWaitQueryTrue(r)
+	isLive := s.ExecutionMode() == string(bugbash.ExecutionModeLiveGKE)
+	if isLive && waitSync && resp.ExecutionID != "" && s.orchestrator != nil {
+		if tree, wErr := s.orchestrator.WaitForExecution(r.Context(), resp.ExecutionID, 120*time.Second); wErr == nil && tree != nil {
+			s.finalizeLiveRollout(r.Context(), tree)
+		}
 	}
 
 	snap := s.BuildStateSnapshot(r.Context())
@@ -437,7 +666,37 @@ func (s *Server) handleAlertmanagerWebhook(w http.ResponseWriter, r *http.Reques
 	s.sse.Broadcast("worker.updated", snap.WorkerPool)
 	s.sse.Broadcast("state.snapshot", snap)
 
-	httputil.WriteJSON(w, http.StatusOK, resp)
+	statusCode := http.StatusOK
+	if isLive && !waitSync && strings.ToLower(payload.Status) != "resolved" {
+		statusCode = http.StatusAccepted
+	}
+	httputil.WriteJSON(w, statusCode, resp)
+}
+
+func (s *Server) applyRuntimeHarnessToWebhook(payload *monitoring.AlertmanagerWebhookPayload) {
+	s.mu.RLock()
+	configured := s.configuredHarness
+	defHarness := s.defaultHarness
+	s.mu.RUnlock()
+
+	if payload.CommonLabels == nil {
+		payload.CommonLabels = make(map[string]string)
+	}
+	if configured != "" {
+		payload.CommonLabels["harness"] = configured
+	} else if strings.TrimSpace(payload.CommonLabels["harness"]) == "" && defHarness != "" {
+		payload.CommonLabels["harness"] = defHarness
+	}
+	for i := range payload.Alerts {
+		if payload.Alerts[i].Labels == nil {
+			payload.Alerts[i].Labels = make(map[string]string)
+		}
+		if configured != "" {
+			payload.Alerts[i].Labels["harness"] = configured
+		} else if strings.TrimSpace(payload.Alerts[i].Labels["harness"]) == "" && defHarness != "" {
+			payload.Alerts[i].Labels["harness"] = defHarness
+		}
+	}
 }
 
 func (s *Server) handleTriggerIncident(w http.ResponseWriter, r *http.Request) {
@@ -473,7 +732,11 @@ func (s *Server) handleTriggerIncident(w http.ResponseWriter, r *http.Request) {
 
 	harnessMode := strings.ToLower(strings.TrimSpace(req.Harness))
 	if harnessMode == "" {
-		harnessMode = "multi"
+		harnessMode = s.DefaultHarness()
+	}
+	if !isValidHarnessMode(harnessMode) {
+		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("unsupported harness %q", harnessMode)})
+		return
 	}
 	requestedModel := strings.TrimSpace(req.Model)
 	if requestedModel == "" {
@@ -542,6 +805,14 @@ func (s *Server) handleTriggerIncident(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	waitSync := isWaitQueryTrue(r)
+	isLive := s.ExecutionMode() == string(bugbash.ExecutionModeLiveGKE)
+	if isLive && waitSync && resp.ExecutionID != "" && s.orchestrator != nil {
+		if tree, wErr := s.orchestrator.WaitForExecution(r.Context(), resp.ExecutionID, 120*time.Second); wErr == nil && tree != nil {
+			s.finalizeLiveRollout(r.Context(), tree)
+		}
+	}
+
 	// 3. Refresh Prometheus scraper metrics snapshot
 	if s.scraper != nil {
 		_, _ = s.scraper.ScrapeOnce(r.Context())
@@ -563,8 +834,13 @@ func (s *Server) handleTriggerIncident(w http.ResponseWriter, r *http.Request) {
 	s.sse.Broadcast("worker.updated", snap.WorkerPool)
 	s.sse.Broadcast("state.snapshot", snap)
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{
+	statusCode := http.StatusOK
+	if isLive && !waitSync {
+		statusCode = http.StatusAccepted
+	}
+	httputil.WriteJSON(w, statusCode, map[string]any{
 		"status":         "triggered",
+		"execution_mode": s.ExecutionMode(),
 		"incident_id":    sc.ID,
 		"harness":        harnessMode,
 		"execution_id":   resp.ExecutionID,
@@ -579,15 +855,39 @@ func (s *Server) handleResetIncidents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if r.Body != nil {
+		raw, _ := io.ReadAll(io.LimitReader(r.Body, 64*1024))
+		if len(bytes.TrimSpace(raw)) > 0 {
+			var resetReq struct {
+				DefaultHarness string `json:"default_harness"`
+				Harness        string `json:"harness"`
+			}
+			if err := json.Unmarshal(raw, &resetReq); err == nil {
+				h := firstNonEmptyStr(resetReq.DefaultHarness, resetReq.Harness)
+				if h != "" {
+					if err := s.SetDefaultHarness(h); err != nil {
+						httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+						return
+					}
+				}
+			}
+		}
+	}
+
 	if s.storefront != nil {
+		if s.storefront.GitManager() != nil {
+			_ = s.storefront.GitManager().ResetToBaseline()
+		}
 		s.storefront.HealIncident("")
 	} else if strings.TrimSpace(s.cfg.StorefrontURL) != "" {
-		healURL := strings.TrimRight(strings.TrimSpace(s.cfg.StorefrontURL), "/") + "/api/incidents/heal"
-		req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, healURL, bytes.NewReader([]byte(`{}`)))
-		if err == nil {
-			req.Header.Set("Content-Type", "application/json")
-			if resp, err := s.httpClient.Do(req); err == nil {
-				_ = resp.Body.Close()
+		base := strings.TrimRight(strings.TrimSpace(s.cfg.StorefrontURL), "/")
+		for _, ep := range []string{"/api/incidents/reset", "/api/incidents/heal"} {
+			req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, base+ep, bytes.NewReader([]byte(`{}`)))
+			if err == nil {
+				req.Header.Set("Content-Type", "application/json")
+				if resp, err := s.httpClient.Do(req); err == nil {
+					_ = resp.Body.Close()
+				}
 			}
 		}
 	}
@@ -597,20 +897,169 @@ func (s *Server) handleResetIncidents(w http.ResponseWriter, r *http.Request) {
 	snap := s.BuildStateSnapshot(r.Context())
 	s.sse.Broadcast("state.snapshot", snap)
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
-		"status": "reset",
-		"state":  snap,
+		"status":          "reset",
+		"default_harness": s.DefaultHarness(),
+		"state":           snap,
 	})
 }
 
 func (s *Server) handleObserverCallback(w http.ResponseWriter, r *http.Request) {
-	if s.orchestrator != nil {
-		s.orchestrator.HandleObserverCallback(w, r)
-		snap := s.BuildStateSnapshot(r.Context())
-		s.sse.Broadcast("tree.updated", snap.LatestTree)
-		s.sse.Broadcast("state.snapshot", snap)
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	http.Error(w, "orchestrator not configured", http.StatusServiceUnavailable)
+	if s.orchestrator == nil {
+		http.Error(w, "orchestrator not configured", http.StatusServiceUnavailable)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<20)
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	var probe struct {
+		EventType string `json:"event_type"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if strings.TrimSpace(probe.EventType) != "" {
+		var ev bugbash.ObserverCallbackEvent
+		if err := json.Unmarshal(raw, &ev); err != nil {
+			http.Error(w, "invalid ObserverCallbackEvent JSON", http.StatusBadRequest)
+			return
+		}
+		tree, err := s.IngestCallbackEvent(r.Context(), ev)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		httputil.WriteJSON(w, http.StatusOK, map[string]any{
+			"status":       "recorded",
+			"execution_id": tree.ExecutionID,
+			"phase":        tree.Phase,
+		})
+		return
+	}
+
+	// Fallback for legacy ChildTaskResult callback payloads
+	s.orchestrator.HandleObserverCallback(w, httptest.NewRequest(http.MethodPost, r.URL.Path, bytes.NewReader(raw)))
+	snap := s.BuildStateSnapshot(r.Context())
+	s.sse.Broadcast("tree.updated", snap.LatestTree)
+	s.sse.Broadcast("state.snapshot", snap)
+}
+
+// IngestCallbackEvent normalizes canonical and alias ObserverCallbackEvent types, applies them to the
+// Orchestrator, triggers RolloutBridge when a tree reaches HEALED, and broadcasts SSE events.
+func (s *Server) IngestCallbackEvent(ctx context.Context, ev bugbash.ObserverCallbackEvent) (*bugbash.BugBashTreeExecution, error) {
+	if s.orchestrator == nil {
+		return nil, fmt.Errorf("orchestrator is not configured")
+	}
+	if ev.Timestamp.IsZero() {
+		ev.Timestamp = time.Now().UTC()
+	}
+	if strings.TrimSpace(ev.RootTaskName) == "" && strings.TrimSpace(ev.IncidentID) != "" {
+		ev.RootTaskName = fmt.Sprintf("triage-%s", strings.ToLower(strings.TrimSpace(ev.IncidentID)))
+	}
+
+	rawType := strings.TrimSpace(ev.EventType)
+	switch rawType {
+	case "root_triage_started":
+		startEv := ev
+		startEv.EventType = bugbash.ObserverEventRootStarted
+		_, _ = s.orchestrator.ApplyObserverCallbackEvent(startEv)
+		if len(ev.ImplicatedServices) > 0 {
+			ev.EventType = bugbash.ObserverEventRootTriaged
+		} else {
+			ev.EventType = bugbash.ObserverEventRootStarted
+		}
+	case "child_fixer_spawned":
+		ev.EventType = bugbash.ObserverEventChildSpawned
+		if ev.Child == nil && (ev.TaskName != "" || ev.Service != "") {
+			ev.Child = &bugbash.ChildTaskResult{
+				TaskName:       firstNonEmptyStr(ev.TaskName, "child-"+ev.Service),
+				ParentTask:     ev.RootTaskName,
+				IncidentID:     ev.IncidentID,
+				Service:        ev.Service,
+				Harness:        ev.HarnessMode,
+				RequestedModel: ev.RequestedModel,
+			}
+		}
+	case "child_fixer_attempt":
+		ev.EventType = bugbash.ObserverEventChildStep
+		if ev.Step == nil {
+			ev.Step = &bugbash.TDDStepEvent{
+				Phase:     "REPRODUCE_RED",
+				Status:    "COMPLETED",
+				Summary:   "Child fixer TDD step",
+				Timestamp: ev.Timestamp,
+			}
+		}
+	case "child_fixer_completed":
+		ev.EventType = bugbash.ObserverEventChildCompleted
+		if ev.Child == nil && (ev.TaskName != "" || ev.Service != "") {
+			ev.Child = &bugbash.ChildTaskResult{
+				TaskName:         firstNonEmptyStr(ev.TaskName, "child-"+ev.Service),
+				ParentTask:       ev.RootTaskName,
+				IncidentID:       ev.IncidentID,
+				Service:          ev.Service,
+				Harness:          ev.HarnessMode,
+				RequestedModel:   ev.RequestedModel,
+				SourceProvenance: firstNonEmptyStr(ev.SourceProvenance, "LIVE"),
+				Suspended:        true,
+				CompletedAt:      ev.Timestamp,
+				SuspendedAt:      ev.Timestamp,
+			}
+		}
+	case "root_merge_completed":
+		ev.EventType = bugbash.ObserverEventRootMerged
+	}
+
+	tree, err := s.orchestrator.ApplyObserverCallbackEvent(ev)
+	if err != nil {
+		return nil, err
+	}
+
+	if ev.EventType == bugbash.ObserverEventRootMerged && tree != nil {
+		s.finalizeLiveRollout(ctx, tree)
+	}
+
+	snap := s.BuildStateSnapshot(ctx)
+	s.sse.Broadcast("observer.event", ev)
+	if ev.Step != nil {
+		s.sse.Broadcast("child.tdd_step", ev.Step)
+	}
+	if snap.LatestTree != nil {
+		s.sse.Broadcast("tree.updated", snap.LatestTree)
+	}
+	if snap.LatestRollout != nil && ev.EventType == bugbash.ObserverEventRootMerged {
+		s.sse.Broadcast("rollout.completed", snap.LatestRollout)
+	}
+	s.sse.Broadcast("worker.updated", snap.WorkerPool)
+	s.sse.Broadcast("state.snapshot", snap)
+
+	return tree, nil
+}
+
+func (s *Server) finalizeLiveRollout(ctx context.Context, tree *bugbash.BugBashTreeExecution) {
+	if tree == nil {
+		return
+	}
+	if s.rolloutBridge != nil {
+		if report, err := s.rolloutBridge.RolloutTreeFix(ctx, tree); err == nil && report != nil {
+			if s.alertBridge != nil {
+				s.alertBridge.ResolveIncidentAlerts(tree.IncidentID, report.TotalDurationMs)
+			}
+			return
+		}
+	}
+	if s.alertBridge != nil {
+		s.alertBridge.ResolveIncidentAlerts(tree.IncidentID, tree.RolloutDurationMs)
+	}
 }
 
 func (s *Server) activateAndCheckoutStorefront(ctx context.Context, sc storefront.IncidentScenario) {
@@ -710,9 +1159,11 @@ func (s *Server) BuildStateSnapshot(ctx context.Context) StateSnapshot {
 	}
 
 	services := s.buildServiceHealthList(ctx, latestTree, latestAlert)
-	gwSummary := s.buildGatewaySummary(latestTree)
+	gwSummary := s.buildGatewaySummary(ctx, latestTree)
 
 	return StateSnapshot{
+		ExecutionMode:  s.ExecutionMode(),
+		DefaultHarness: s.DefaultHarness(),
 		ExternalLinks: ExternalSurfaceLinks{
 			StorefrontURL: s.cfg.StorefrontPublicURL,
 			GrafanaURL:    s.cfg.GrafanaPublicURL,
@@ -873,15 +1324,22 @@ func (s *Server) convertTreeExecution(
 		}
 	}
 
+	execMode := string(ex.ExecutionMode)
+	if execMode == "" {
+		execMode = s.ExecutionMode()
+	}
+
 	return &ObserverTreeView{
-		ExecutionID: ex.ExecutionID,
-		IncidentID:  ex.IncidentID,
-		Title:       ex.Title,
-		Summary:     ex.Summary,
-		WhyCIMissedIt: ex.WhyCIMissedIt,
-		HarnessMode:    ex.HarnessMode,
-		RequestedModel: ex.RequestedModel,
-		Phase:          ex.Phase,
+		ExecutionID:      ex.ExecutionID,
+		ExecutionMode:    execMode,
+		IncidentID:       ex.IncidentID,
+		Title:            ex.Title,
+		Summary:          ex.Summary,
+		WhyCIMissedIt:    ex.WhyCIMissedIt,
+		HarnessMode:      ex.HarnessMode,
+		RequestedModel:   ex.RequestedModel,
+		SourceProvenance: ex.SourceProvenance,
+		Phase:            ex.Phase,
 		RootTask: ObserverRootTaskView{
 			TaskName:           ex.RootTask.TaskName,
 			Phase:              rootPhase,
@@ -972,13 +1430,24 @@ func (s *Server) buildServiceHealthList(
 	return out
 }
 
-func (s *Server) buildGatewaySummary(latestTree *ObserverTreeView) GatewayStatusSummary {
+func (s *Server) buildGatewaySummary(ctx context.Context, latestTree *ObserverTreeView) GatewayStatusSummary {
 	cfg := gateway.DefaultConfig()
 	var sessions []gateway.TaskSession
 	if s.gateway != nil {
 		cfg = s.gateway.Config()
 		sessions = s.gateway.ListSessions()
 	}
+	if s.gatewayClient != nil {
+		qCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		if remoteCfg, err := s.gatewayClient.GetConfig(qCtx); err == nil && len(remoteCfg.FallbackCascade) > 0 {
+			cfg = remoteCfg
+		}
+		if remoteSessions, err := s.gatewayClient.ListSessions(qCtx); err == nil && len(remoteSessions) > 0 {
+			sessions = remoteSessions
+		}
+		cancel()
+	}
+
 	activeModel := gateway.DefaultFallbackCascade[0]
 	if len(cfg.FallbackCascade) > 0 {
 		activeModel = cfg.FallbackCascade[0]
@@ -992,13 +1461,17 @@ func (s *Server) buildGatewaySummary(latestTree *ObserverTreeView) GatewayStatus
 		if last.SourceProvenance != "" {
 			prov = string(last.SourceProvenance)
 		}
-	} else if latestTree != nil && len(latestTree.ChildTasks) > 0 {
-		c := latestTree.ChildTasks[0]
-		if c.ActiveModel != "" {
-			activeModel = c.ActiveModel
-		}
-		if c.SourceProvenance != "" {
-			prov = c.SourceProvenance
+	} else if latestTree != nil {
+		if latestTree.SourceProvenance != "" {
+			prov = latestTree.SourceProvenance
+		} else if len(latestTree.ChildTasks) > 0 {
+			c := latestTree.ChildTasks[0]
+			if c.ActiveModel != "" {
+				activeModel = c.ActiveModel
+			}
+			if c.SourceProvenance != "" {
+				prov = c.SourceProvenance
+			}
 		}
 	}
 	return GatewayStatusSummary{
@@ -1025,4 +1498,28 @@ func workerIDForIP(pool bugbash.WorkerPoolSummary, ip string) string {
 		}
 	}
 	return ""
+}
+
+func isWaitQueryTrue(r *http.Request) bool {
+	if r == nil || r.URL == nil {
+		return false
+	}
+	v := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("wait")))
+	return v == "true" || v == "1" || v == "yes"
+}
+
+func firstNonEmptyStr(vals ...string) string {
+	for _, v := range vals {
+		if t := strings.TrimSpace(v); t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
