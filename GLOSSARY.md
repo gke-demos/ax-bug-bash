@@ -67,3 +67,7 @@ _Avoid_: Canned screengrab, mocked replay, synthetic slideshow.
 **Three-Layer Substrate Stack**:
 The architectural composition of Agent Substrate v0.6.0 sandbox actors and volume snapshots (Layer 1), `agent-substrate/env` guest lifecycle probes and workspace hooks (Layer 2), and `google/ax` declarative `Task`, `Workspace`, `Model`, and Custom Runner orchestration (Layer 3).
 _Avoid_: Monolithic agent framework, single-layer CRD wrapper.
+
+**Upstream Compatibility Overlay**:
+The surgical `ax-server` and guest-runner patches (`Issue #482` `/healthz` `WakeupProbe` and per-actor `EgressPolicy` before `ResumeActor`, `Issue #511` OpenFGA `AccessPolicy` and detached `context.WithoutCancel(ctx)` in `SuspendTask`, and `Issue #518` `/workspace/.ax` volume-snapshot persistence) that bridge upstream `google/ax` (`4b7bf6f`) to Agent Substrate v0.6.0 on GKE.
+_Avoid_: Permanent fork, monkey patch, workaround hack.
