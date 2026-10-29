@@ -1,0 +1,51 @@
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: retail-storefront-gmp-export
+  namespace: ax-bug-bash
+  labels:
+    app.kubernetes.io/name: retail-storefront-gmp-export
+    app.kubernetes.io/part-of: ax-bug-bash
+spec:
+  selector:
+    matchLabels:
+      monitoring-target: retail-storefront
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 10s
+---
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: storefront-supervisor-ports-gmp
+  namespace: ax-bug-bash
+  labels:
+    app.kubernetes.io/name: storefront-supervisor-ports-gmp
+    app.kubernetes.io/part-of: ax-bug-bash
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/part-of: ax-bug-bash
+  endpoints:
+    # 5 polyglot Hot-Reload Supervisor endpoints:
+    # - storefront-web: http-web (:3001)
+    # - checkout-service: http-checkout (:8081)
+    # - pricing-service: http-pricing (:8082 / :8083)
+    # - inventory-service: http-inventory (:8083 / :8084)
+    # - shipping-service: http-shipping (:8084 / :8082)
+    - port: http-web
+      path: /metrics
+      interval: 10s
+    - port: http-checkout
+      path: /metrics
+      interval: 10s
+    - port: http-pricing
+      path: /metrics
+      interval: 10s
+    - port: http-inventory
+      path: /metrics
+      interval: 10s
+    - port: http-shipping
+      path: /metrics
+      interval: 10s

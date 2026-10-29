@@ -23,12 +23,12 @@ run_service() {
       ;;
     pricing-service)
       echo "==> [pricing-service] Running Python unit tests..."
-      (cd "$SCRIPT_DIR/pricing-service" && python3 -m unittest discover -s . -p "test_*.py" -v)
+      (cd "$SCRIPT_DIR/pricing-service" && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s . -p "test_*.py" -v)
       ;;
     inventory-service)
       echo "==> [inventory-service] Running Rust unit tests..."
       if command -v cargo >/dev/null 2>&1; then
-        (cd "$SCRIPT_DIR/inventory-service" && cargo test)
+        (cd "$SCRIPT_DIR/inventory-service" && CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/ax-cargo-target}" cargo test)
       else
         (cd "$SCRIPT_DIR/inventory-service" && python3 ./verify_rust_tests.py)
       fi

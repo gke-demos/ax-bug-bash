@@ -9,6 +9,7 @@
   ],
   "providers": {
     "agent-platform-gateway": {
+      "api": "openai-completions",
       "type": "openai-compatible",
       "baseUrl": "http://model-gateway.ax-system.svc.cluster.local:8080/s/default-task/v1",
       "apiKey": "ax-sandbox-token",
@@ -19,24 +20,28 @@
         {
           "id": "gemini-3.8-flash",
           "name": "Gemini 3.8 Flash",
+          "api": "openai-completions",
           "contextWindow": 1048576,
           "maxTokens": 8192
         },
         {
           "id": "gemini-3.7-flash",
           "name": "Gemini 3.7 Flash",
+          "api": "openai-completions",
           "contextWindow": 1048576,
           "maxTokens": 8192
         },
         {
           "id": "gemini-3.6-flash",
           "name": "Gemini 3.6 Flash",
+          "api": "openai-completions",
           "contextWindow": 1048576,
           "maxTokens": 8192
         },
         {
           "id": "gemini-3.5-flash",
           "name": "Gemini 3.5 Flash",
+          "api": "openai-completions",
           "contextWindow": 1048576,
           "maxTokens": 8192
         }

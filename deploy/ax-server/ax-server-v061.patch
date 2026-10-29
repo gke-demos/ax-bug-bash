@@ -1,0 +1,236 @@
+--- a/internal/controller/reconciler_test.go
++++ b/internal/controller/reconciler_test.go
+@@ -26,7 +26,7 @@
+ 	"github.com/google/ax/internal/controller"
+ 	"github.com/google/ax/internal/substrate"
+ 	"github.com/google/ax/pkg/apis/v1alpha1"
+-	"go.ate.dev/substrate/pkg/proto/ateapipb"
++	ateapipb "go.ate.dev/substrate/api/ateapi/v1"
+ 	"google.golang.org/grpc"
+ 	"google.golang.org/grpc/codes"
+ 	"google.golang.org/grpc/credentials/insecure"
+--- a/internal/server/actor_status_test.go
++++ b/internal/server/actor_status_test.go
+@@ -19,7 +19,7 @@
+ 	"testing"
+ 
+ 	"github.com/google/ax/pkg/apis/v1alpha1"
+-	"go.ate.dev/substrate/pkg/proto/ateapipb"
++	ateapipb "go.ate.dev/substrate/api/ateapi/v1"
+ )
+ 
+ func testActor(name string, state ateapipb.ActorState, workerIP string) *ateapipb.Actor {
+--- a/internal/server/server.go
++++ b/internal/server/server.go
+@@ -20,12 +20,13 @@
+ 	"log/slog"
+ 	"net/http"
+ 	"strings"
++	"time"
+ 
+ 	"github.com/google/ax/internal/lock"
+ 	"github.com/google/ax/internal/store"
+ 	"github.com/google/ax/internal/substrate"
+ 	"github.com/google/ax/pkg/apis/v1alpha1"
+-	"go.ate.dev/substrate/pkg/proto/ateapipb"
++	ateapipb "go.ate.dev/substrate/api/ateapi/v1"
+ 	"google.golang.org/grpc"
+ 	"google.golang.org/grpc/codes"
+ 	"google.golang.org/grpc/status"
+@@ -268,6 +269,11 @@
+ 	if req == nil {
+ 		return nil, status.Error(codes.InvalidArgument, "missing request")
+ 	}
++	// Detach from caller's stream cancellation so an in-sandbox runner calling
++	// SuspendTask on itself (OnCommandExit -> SuspendTask) does not cancel
++	// SuspendActor mid-checkpoint when runsc tears down the caller's container.
++	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
++	defer cancel()
+ 	atespace := req.Atespace
+ 	if atespace == "" {
+ 		atespace = "default"
+--- a/internal/server/server_test.go
++++ b/internal/server/server_test.go
+@@ -29,7 +29,7 @@
+ 	"github.com/google/ax/internal/store/memory"
+ 	"github.com/google/ax/internal/substrate"
+ 	"github.com/google/ax/pkg/apis/v1alpha1"
+-	"go.ate.dev/substrate/pkg/proto/ateapipb"
++	ateapipb "go.ate.dev/substrate/api/ateapi/v1"
+ 	"google.golang.org/grpc"
+ 	"google.golang.org/grpc/codes"
+ 	"google.golang.org/grpc/credentials/insecure"
+--- a/internal/substrate/client.go
++++ b/internal/substrate/client.go
+@@ -28,7 +28,7 @@
+ 
+ 	"github.com/cenkalti/backoff/v5"
+ 	"github.com/google/ax/pkg/apis/v1alpha1"
+-	"go.ate.dev/substrate/pkg/proto/ateapipb"
++	ateapipb "go.ate.dev/substrate/api/ateapi/v1"
+ 	"google.golang.org/grpc"
+ 	"google.golang.org/grpc/codes"
+ 	"google.golang.org/grpc/credentials"
+@@ -378,7 +378,7 @@
+ 			Env:     envList,
+ 			WakeupProbe: &ateapipb.WakeupProbe{
+ 				HttpGet: &ateapipb.HttpGetAction{
+-					Path: "/readyz",
++					Path: "/healthz",
+ 					Port: 80,
+ 				},
+ 			},
+@@ -394,6 +394,9 @@
+ 		SnapshotConfig: &ateapipb.SnapshotConfig{
+ 			StorageLocation:   snapshotsBucket,
+ 			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
++			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{
++				Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED,
++			},
+ 		},
+ 		Resources: &ateapipb.ResourceRequirements{
+ 			Limits: &ateapipb.Resources{
+@@ -490,6 +493,9 @@
+ 						return err
+ 					}, codes.Unavailable)
+ 					if err == nil {
++						if egErr := c.ensureActorEgressPolicy(ctx, atespace, actorName); egErr != nil {
++							return nil, egErr
++						}
+ 						return actor, nil
+ 					}
+ 					return nil, fmt.Errorf("recreating actor %s/%s after crash: %w", atespace, actorName, err)
+@@ -504,6 +510,9 @@
+ 						}
+ 						actor, err = c.control.CreateActor(ctx, req)
+ 						if err == nil {
++							if egErr := c.ensureActorEgressPolicy(ctx, atespace, actorName); egErr != nil {
++								return nil, egErr
++							}
+ 							return actor, nil
+ 						}
+ 						if status.Code(err) != codes.AlreadyExists {
+@@ -513,11 +522,70 @@
+ 					return nil, fmt.Errorf("actor %s/%s is still deleting; please retry", atespace, actorName)
+ 				}
+ 			}
++			if getErr == nil {
++				if egErr := c.ensureActorEgressPolicy(ctx, atespace, actorName); egErr != nil {
++					return nil, egErr
++				}
++			}
+ 			return existing, getErr
+ 		}
+ 		return nil, fmt.Errorf("creating actor %s/%s: %w", atespace, actorName, err)
+ 	}
++	if egErr := c.ensureActorEgressPolicy(ctx, atespace, actorName); egErr != nil {
++		return nil, egErr
++	}
+ 	return actor, nil
++}
++
++// ensureActorEgressPolicy attaches the least-privilege cluster-internal EgressPolicy
++// ("default") to actorName before ResumeActor is invoked when AX_AUTO_ACTOR_EGRESS=true.
++func (c *Client) ensureActorEgressPolicy(ctx context.Context, atespace, actorName string) error {
++	val := strings.ToLower(strings.TrimSpace(os.Getenv("AX_AUTO_ACTOR_EGRESS")))
++	if val != "true" && val != "1" {
++		return nil
++	}
++	mkRule := func(hosts []string, ports []int32) *ateapipb.EgressRule {
++		return &ateapipb.EgressRule{
++			Http: &ateapipb.HttpRule{
++				Hostnames: hosts,
++				Ports:     &ateapipb.Ports{Numbers: ports},
++			},
++		}
++	}
++	req := &ateapipb.CreateActorEgressPolicyRequest{
++		Actor: &ateapipb.ObjectRef{
++			Atespace: atespace,
++			Name:     actorName,
++		},
++		EgressPolicy: &ateapipb.EgressPolicy{
++			Metadata: &ateapipb.ResourceMetadata{
++				Atespace: atespace,
++				Name:     "default",
++			},
++			Rules: []*ateapipb.EgressRule{
++				mkRule([]string{"ax-server.ax-system.svc.cluster.local", "ax-server.ax-system.svc"}, []int32{80, 8080, 9090}),
++				mkRule([]string{"model-gateway.ax-system.svc.cluster.local", "model-gateway.ax-system.svc"}, []int32{80, 8080}),
++				mkRule([]string{
++					"storefront.ax-bug-bash.svc.cluster.local",
++					"storefront.ax-bug-bash.svc",
++					"storefront-web.ax-bug-bash.svc.cluster.local",
++					"storefront-web.ax-bug-bash.svc",
++					"retail-storefront.ax-bug-bash.svc.cluster.local",
++				}, []int32{3001}),
++				mkRule([]string{"storefront-git.ax-bug-bash.svc.cluster.local", "storefront-git.ax-bug-bash.svc"}, []int32{8090}),
++				mkRule([]string{"ax-observer.ax-bug-bash.svc.cluster.local", "ax-observer.ax-bug-bash.svc"}, []int32{3000}),
++				mkRule([]string{"loki.monitoring.svc.cluster.local", "loki.monitoring.svc"}, []int32{3100}),
++			},
++		},
++	}
++	err := retryOnCodes(ctx, func() error {
++		_, err := c.control.CreateActorEgressPolicy(ctx, req)
++		return err
++	}, codes.Unavailable)
++	if err != nil && status.Code(err) != codes.AlreadyExists {
++		return fmt.Errorf("creating actor egress policy for %s/%s: %w", atespace, actorName, err)
++	}
++	return nil
+ }
+ 
+ // ResumeActor resumes the specified actor onto a worker and returns the worker details.
+--- a/internal/substrate/client_test.go
++++ b/internal/substrate/client_test.go
+@@ -22,7 +22,7 @@
+ 	"time"
+ 
+ 	"github.com/google/ax/pkg/apis/v1alpha1"
+-	"go.ate.dev/substrate/pkg/proto/ateapipb"
++	ateapipb "go.ate.dev/substrate/api/ateapi/v1"
+ 	"google.golang.org/grpc"
+ 	"google.golang.org/grpc/codes"
+ 	"google.golang.org/grpc/status"
+--- a/runner/runner.go
++++ b/runner/runner.go
+@@ -28,6 +28,7 @@
+ 	"log/slog"
+ 	"os"
+ 	"os/exec"
++	"path/filepath"
+ 	"syscall"
+ 	"time"
+ 
+@@ -123,6 +124,9 @@
+ 		_ = metaServer.Stop(context.Background())
+ 	}()
+ 
++	if workspace.AXDir == workspace.DefaultAXDir && wsPath != "" {
++		workspace.AXDir = filepath.Join(wsPath, ".ax")
++	}
+ 	if _, err := workspace.SetupWorkspace(ctx, cfg.Workspace, wsPath); err != nil {
+ 		slog.Error("workspace maiden run setup failed", "workspace", ref.GetName(), "path", wsPath, "error", err)
+ 	} else {
+--- a/test/e2e/e2e_test.go
++++ b/test/e2e/e2e_test.go
+@@ -22,7 +22,7 @@
+ 	"time"
+ 
+ 	"github.com/google/ax/pkg/apis/v1alpha1"
+-	"go.ate.dev/substrate/pkg/proto/ateapipb"
++	ateapipb "go.ate.dev/substrate/api/ateapi/v1"
+ 	"google.golang.org/grpc/codes"
+ 	"google.golang.org/grpc/status"
+ )
+--- a/test/e2e/harness_test.go
++++ b/test/e2e/harness_test.go
+@@ -35,7 +35,7 @@
+ 
+ 	"github.com/google/ax/internal/substrate"
+ 	"github.com/google/ax/pkg/apis/v1alpha1"
+-	"go.ate.dev/substrate/pkg/proto/ateapipb"
++	ateapipb "go.ate.dev/substrate/api/ateapi/v1"
+ 	"google.golang.org/grpc"
+ 	"google.golang.org/grpc/credentials/insecure"
+ )

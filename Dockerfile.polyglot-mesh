@@ -1,0 +1,73 @@
+FROM python:3.12-slim
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HOME=/root \
+    GOCACHE=/var/cache/ax-build/gocache \
+    GOMODCACHE=/var/cache/ax-build/gomodcache \
+    CARGO_HOME=/var/cache/ax-build/cargo \
+    CARGO_TARGET_DIR=/opt/cargo-target \
+    AX_CARGO_OFFLINE=true \
+    RUSTUP_HOME=/usr/local/rustup \
+    RUST_BACKTRACE=1 \
+    VIRTUAL_ENV=/opt/ax-venv \
+    STOREFRONT_SERVICES_DIR=/opt/storefront-seed/services \
+    PATH="/opt/ax-venv/bin:/usr/local/go/bin:/var/cache/ax-build/cargo/bin:/usr/local/bin:${PATH}"
+
+# Install system dependencies, git (Smart HTTP cgi + git-daemon), Node.js 22, Go 1.23, Rust stable, and Python FastAPI/Uvicorn venv
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      bash \
+      build-essential \
+      ca-certificates \
+      curl \
+      git \
+      gnupg \
+      pkg-config \
+      procps \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && curl -fsSL https://go.dev/dl/go1.23.6.linux-amd64.tar.gz | tar -C /usr/local -xz \
+    && curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal \
+    && python3 -m venv /opt/ax-venv \
+    && /opt/ax-venv/bin/pip install --no-cache-dir fastapi uvicorn pydantic httpx pytest \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /var/cache/ax-build/gocache \
+                /var/cache/ax-build/gomodcache \
+                /var/cache/ax-build/cargo \
+                /opt/cargo-target \
+                /opt/storefront-seed \
+                /var/lib/storefront-git \
+                /var/lib/ax-supervisor \
+    && chmod 1777 /tmp \
+    && git config --system user.name "Storefront Polyglot Mesh" \
+    && git config --system user.email "mesh@ax-bug-bash.local" \
+    && git config --system init.defaultBranch main \
+    && git config --system commit.gpgsign false \
+    && git config --system tag.gpgSign false \
+    && git config --system safe.directory "*"
+
+COPY services/ /opt/storefront-seed/services/
+COPY bin/linux_amd64/polyglot-supervisor /usr/local/bin/polyglot-supervisor
+COPY bin/linux_amd64/storefront-git /usr/local/bin/storefront-git
+
+# Pre-warm Go, Rust/Cargo, Python, and Node.js caches and expose /opt/ax-bug-bash/services symlink
+RUN mkdir -p /opt/ax-bug-bash \
+    && ln -s /opt/storefront-seed/services /opt/ax-bug-bash/services \
+    && printf "module github.com/gke-demos/ax-bug-bash\n\ngo 1.23\n" > /opt/storefront-seed/go.mod \
+    && (cd /opt/storefront-seed \
+        && go build -o /tmp/warmup-checkout ./services/checkout-service/cmd/server \
+        && go build -o /tmp/warmup-shipping ./services/shipping-service/cmd/server \
+        && go test -c -o /tmp/warmup-checkout.test ./services/checkout-service \
+        && go test -c -o /tmp/warmup-shipping.test ./services/shipping-service) \
+    && AX_CARGO_OFFLINE=false cargo build --release --manifest-path /opt/storefront-seed/services/inventory-service/server/Cargo.toml \
+    && /opt/ax-venv/bin/python3 -m compileall /opt/storefront-seed/services/pricing-service \
+    && node --experimental-strip-types --input-type=module -e 'await import("/opt/storefront-seed/services/storefront-web/src/server.ts")' \
+    && rm -rf /tmp/warmup-* \
+    && chmod +x /usr/local/bin/polyglot-supervisor /usr/local/bin/storefront-git
+
+WORKDIR /var/lib/ax-supervisor
+
+EXPOSE 3001 8081 8082 8083 8084 8090 9418
+
+ENTRYPOINT ["/usr/local/bin/polyglot-supervisor"]

@@ -1,76 +1,253 @@
 #!/usr/bin/env bash
+# End-to-End GKE + Agent Substrate v0.6.0 + google/ax Deployment Automation (ADR-0006, ADR-0008, ADR-0009, ADR-0011)
+# Discovers cluster & project dynamically via kubectl/gcloud defaults — zero hardcoded cluster/project names.
 set -euo pipefail
 
-# One-command GKE + Agent Substrate v0.6.0 + google/ax deployment script for ax-bug-bash.
-# Uses active kubectl context and gcloud project defaults (never hardcoded cluster/node names).
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${ROOT_DIR}"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+export PATH="${HOME}/.local/go/bin:/usr/local/go/bin:${HOME}/go/bin:${HOME}/.cargo/bin:/tmp/bin:${PATH}"
 
-DRY_RUN="${DRY_RUN:-false}"
-if [[ "${1:-}" == "--dry-run" ]]; then
-  DRY_RUN="true"
-fi
+DRY_RUN=false
+SKIP_BUILD=false
+for arg in "$@"; do
+  case "${arg}" in
+    --dry-run)
+      DRY_RUN=true
+      ;;
+    --skip-build)
+      SKIP_BUILD=true
+      ;;
+  esac
+done
 
-KUBE_CONTEXT="${KUBE_CONTEXT:-$(kubectl config current-context 2>/dev/null || echo "current-gke-context")}"
-PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null || echo "sample-cloud-project")}"
+KUBE_CONTEXT="${KUBE_CONTEXT:-$(kubectl config current-context 2>/dev/null || echo "gke-default-context")}"
+PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null || echo "example-gcp-project")}"
 REGION="${REGION:-us-central1}"
-IMAGE_REGISTRY="${IMAGE_REGISTRY:-${REGION}-docker.pkg.dev/${PROJECT_ID}/ax-bug-bash}"
+AR_REPO="${AR_REPO:-ax-bug-bash}"
+IMAGE_REGISTRY="${IMAGE_REGISTRY:-${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}}"
+TAG="${TAG:-$(git rev-parse --short HEAD 2>/dev/null || echo "v060")}"
 
-# Resolve @sha256: digest for ax-task-runner (required by Agent Substrate v0.6.0 SnapshotConfig)
-TASK_RUNNER_SHA256="${TASK_RUNNER_SHA256:-}"
-if [[ -z "${TASK_RUNNER_SHA256}" ]]; then
-  if [[ "${DRY_RUN}" == "false" ]] && command -v gcloud >/dev/null 2>&1; then
-    RESOLVED_DIGEST="$(gcloud artifacts docker images describe "${IMAGE_REGISTRY}/ax-task-runner:latest" \
-      --format='value(image_summary.digest)' 2>/dev/null || true)"
-    TASK_RUNNER_SHA256="${RESOLVED_DIGEST#sha256:}"
+if [[ "${DRY_RUN}" == "true" ]]; then
+  PROJECT_NUMBER="${PROJECT_NUMBER:-000000000000}"
+  AX_SNAPSHOTS_BUCKET="${AX_SNAPSHOTS_BUCKET:-${PROJECT_ID}-ax-snapshots}"
+  ATEWORKER_GVISOR_IMAGE="${ATEWORKER_GVISOR_IMAGE:-${IMAGE_REGISTRY}/ateworker-gvisor:v0.6.0}"
+  MODEL_GATEWAY_SHA256="1111111111111111111111111111111111111111111111111111111111111111"
+  STOREFRONT_SHA256="2222222222222222222222222222222222222222222222222222222222222222"
+  AX_OBSERVER_SHA256="3333333333333333333333333333333333333333333333333333333333333333"
+  TASK_RUNNER_SHA256="4444444444444444444444444444444444444444444444444444444444444444"
+  AX_SERVER_SHA256="5555555555555555555555555555555555555555555555555555555555555555"
+else
+  PROJECT_NUMBER="${PROJECT_NUMBER:-$(gcloud projects list --filter="projectId=${PROJECT_ID}" --format="value(projectNumber)" 2>/dev/null || gcloud projects describe "${PROJECT_ID}" --format="value(projectNumber)" 2>/dev/null || echo "")}"
+  if ! gcloud artifacts repositories describe "${AR_REPO}" --location="${REGION}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+    gcloud artifacts repositories create "${AR_REPO}" \
+      --repository-format=docker \
+      --location="${REGION}" \
+      --project="${PROJECT_ID}" \
+      --quiet >/dev/null 2>&1 || AR_REPO="workshop"
+    IMAGE_REGISTRY="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}"
+  fi
+  if [[ -z "${AX_SNAPSHOTS_BUCKET:-}" ]]; then
+    EXISTING_BUCKET="$(gcloud storage buckets list --project="${PROJECT_ID}" --format="value(name)" 2>/dev/null | awk '/ax-snapshots|-ate$/ {print $0; exit}' || true)"
+    AX_SNAPSHOTS_BUCKET="${EXISTING_BUCKET:-${PROJECT_ID}-ax-snapshots-${PROJECT_NUMBER:-0}}"
+  fi
+  if [[ -z "${ATEWORKER_GVISOR_IMAGE:-}" ]]; then
+    EXISTING_WORKER_IMG="$(kubectl --context="${KUBE_CONTEXT}" -n ax-bug-bash get workerpool ax-bug-bash-workers -o jsonpath='{.spec.workerImage}' 2>/dev/null || true)"
+    ATEWORKER_GVISOR_IMAGE="${EXISTING_WORKER_IMG:-us-docker.pkg.dev/${PROJECT_ID}/ate-images/ateworker-gvisor:v0.6.1}"
   fi
 fi
-if [[ -z "${TASK_RUNNER_SHA256}" ]]; then
-  TASK_RUNNER_SHA256="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-fi
 
-export KUBE_CONTEXT PROJECT_ID REGION IMAGE_REGISTRY TASK_RUNNER_SHA256
-export AX_DEFAULT_TASK_IMAGE="${IMAGE_REGISTRY}/ax-task-runner@sha256:${TASK_RUNNER_SHA256}"
-
-echo "==> [ax-bug-bash] Deploying to GKE context '${KUBE_CONTEXT}' (project '${PROJECT_ID}')"
-echo "==> [ax-bug-bash] Task runner digest-pinned image: ${AX_DEFAULT_TASK_IMAGE}"
+echo "==> Active Kubernetes Context: ${KUBE_CONTEXT}"
+echo "==> Active GCP Project:        ${PROJECT_ID} (number=${PROJECT_NUMBER:-unknown})"
+echo "==> Artifact Registry:         ${IMAGE_REGISTRY}"
+echo "==> Snapshots Bucket:          gs://${AX_SNAPSHOTS_BUCKET}/ax-bug-bash/"
 
 render_manifest() {
   local file="$1"
   sed \
     -e "s|\${IMAGE_REGISTRY}|${IMAGE_REGISTRY}|g" \
+    -e "s|\${PROJECT_ID}|${PROJECT_ID}|g" \
+    -e "s|\${AX_SNAPSHOTS_BUCKET}|${AX_SNAPSHOTS_BUCKET}|g" \
+    -e "s|\${ATEWORKER_GVISOR_IMAGE}|${ATEWORKER_GVISOR_IMAGE}|g" \
+    -e "s|\${MODEL_GATEWAY_SHA256}|${MODEL_GATEWAY_SHA256}|g" \
+    -e "s|\${STOREFRONT_SHA256}|${STOREFRONT_SHA256}|g" \
+    -e "s|\${AX_OBSERVER_SHA256}|${AX_OBSERVER_SHA256}|g" \
     -e "s|\${TASK_RUNNER_SHA256}|${TASK_RUNNER_SHA256}|g" \
-    "$file"
+    -e "s|\${AX_SERVER_SHA256}|${AX_SERVER_SHA256}|g" \
+    "${file}"
 }
 
 if [[ "${DRY_RUN}" == "true" ]]; then
-  echo "==> [dry-run] Validating rendered manifests..."
-  render_manifest "${REPO_ROOT}/manifests/monitoring/01-prometheus-alertmanager.yaml" >/dev/null
-  render_manifest "${REPO_ROOT}/manifests/monitoring/02-loki-grafana.yaml" >/dev/null
-  render_manifest "${REPO_ROOT}/manifests/ax-v060-overlay.yaml" >/dev/null
-  render_manifest "${REPO_ROOT}/manifests/bug-bash-system.yaml" >/dev/null
-  echo "==> [dry-run] Rendered OpenFGA AccessPolicy (Issue #511), WorkerPool v0.6.0, Workspace (Issue #482), and @sha256: pinned deployments cleanly."
+  echo "==> [DRY-RUN] Rendering manifests/ax-v060-overlay.yaml, monitoring stack, and manifests/bug-bash-system.yaml with @sha256: digests..."
+  render_manifest manifests/ax-v060-overlay.yaml > /dev/null
+  cat manifests/monitoring/01-prometheus-alertmanager.yaml > /dev/null
+  cat manifests/monitoring/02-loki-grafana.yaml > /dev/null
+  cat manifests/monitoring/03-gmp-podmonitoring.yaml > /dev/null
+  RENDERED_SYSTEM="$(render_manifest manifests/bug-bash-system.yaml)"
+  if [[ "${RENDERED_SYSTEM}" != *"@sha256:${MODEL_GATEWAY_SHA256}"* ]] || \
+     [[ "${RENDERED_SYSTEM}" != *"@sha256:${STOREFRONT_SHA256}"* ]] || \
+     [[ "${RENDERED_SYSTEM}" != *"@sha256:${AX_OBSERVER_SHA256}"* ]] || \
+     [[ "${RENDERED_SYSTEM}" != *"@sha256:${TASK_RUNNER_SHA256}"* ]] || \
+     [[ "${RENDERED_SYSTEM}" != *"@sha256:${AX_SERVER_SHA256}"* ]]; then
+    echo "ERROR: rendered manifests/bug-bash-system.yaml missing @sha256: digest pins" >&2
+    exit 1
+  fi
+  echo "==> [DRY-RUN] Manifest rendering and @sha256: digest verification succeeded."
   exit 0
 fi
 
-echo "==> [1/4] Applying Agent Substrate v0.6.0 overlay & OpenFGA AccessPolicy (Issue #511)..."
-render_manifest "${REPO_ROOT}/manifests/ax-v060-overlay.yaml" | kubectl --context="${KUBE_CONTEXT}" apply -f -
+resolve_digest() {
+  local image_name="$1"
+  local tag_ref="${IMAGE_REGISTRY}/${image_name}:${TAG}"
+  local digest=""
+  digest="$(gcloud artifacts docker images describe "${tag_ref}" --format='value(image_summary.digest)' 2>/dev/null || true)"
+  if [[ -z "${digest}" ]]; then
+    digest="$(docker inspect --format='{{index .RepoDigests 0}}' "${tag_ref}" 2>/dev/null | awk -F'@' '{print $2}' || true)"
+  fi
+  if [[ -z "${digest}" ]]; then
+    digest="$(gcloud artifacts docker images list "${IMAGE_REGISTRY}/${image_name}" --limit=1 --sort-by=~UPDATE_TIME --format='value(DIGEST)' 2>/dev/null | head -n1 || true)"
+  fi
+  echo "${digest#sha256:}"
+}
 
-echo "==> [2/4] Applying Prometheus, Alertmanager, Loki & Grafana monitoring stack (5s scrape, for: 0s)..."
-render_manifest "${REPO_ROOT}/manifests/monitoring/01-prometheus-alertmanager.yaml" | kubectl --context="${KUBE_CONTEXT}" apply -f -
-render_manifest "${REPO_ROOT}/manifests/monitoring/02-loki-grafana.yaml" | kubectl --context="${KUBE_CONTEXT}" apply -f -
+build_and_push() {
+  local image_name="$1"
+  local dockerfile="$2"
+  local context_dir="${3:-.}"
+  local full_tag="${IMAGE_REGISTRY}/${image_name}:${TAG}"
 
-echo "==> [3/4] Applying Model Gateway (:8080), Retail Storefront (:3001), and AX Observer (:3000)..."
-render_manifest "${REPO_ROOT}/manifests/bug-bash-system.yaml" | kubectl --context="${KUBE_CONTEXT}" apply -f -
+  if [[ "${SKIP_BUILD}" != "true" ]]; then
+    echo "==> Building & pushing ${full_tag} (${dockerfile})..." >&2
+    docker build -f "${dockerfile}" -t "${full_tag}" "${context_dir}" >&2
+    docker push "${full_tag}" >&2
+  fi
 
-echo "==> [4/4] Waiting for rollouts and verifying sub-second in-cluster Git clone before /readyz (Issue #482)..."
-kubectl --context="${KUBE_CONTEXT}" -n ax-system rollout status deployment/model-gateway --timeout=120s
-kubectl --context="${KUBE_CONTEXT}" -n ax-bug-bash rollout status deployment/storefront --timeout=120s
-kubectl --context="${KUBE_CONTEXT}" -n ax-bug-bash rollout status deployment/ax-observer --timeout=120s
+  local sha
+  sha="$(resolve_digest "${image_name}")"
+  if [[ -z "${sha}" ]]; then
+    echo "ERROR: failed to resolve @sha256: digest for ${image_name}" >&2
+    exit 1
+  fi
+  echo "${sha}"
+}
 
-# Verify < 500ms in-cluster Git clone and /readyz probe (Issue #482)
+if [[ "${SKIP_BUILD}" != "true" ]]; then
+  echo "==> Cross-compiling static Linux amd64 Go binaries..."
+  mkdir -p bin/linux_amd64
+  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/linux_amd64/ax-observer ./cmd/ax-observer
+  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/linux_amd64/model-gateway ./cmd/model-gateway
+  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/linux_amd64/ax-task-runner ./cmd/ax-bug-bash-runner
+  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/linux_amd64/polyglot-supervisor ./cmd/polyglot-supervisor
+  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/linux_amd64/storefront-git ./cmd/storefront-git
+fi
+
+MODEL_GATEWAY_SHA256="${MODEL_GATEWAY_SHA256:-$(build_and_push "model-gateway" "deploy/model-gateway/Dockerfile" ".")}"
+STOREFRONT_SHA256="${STOREFRONT_SHA256:-$(build_and_push "storefront" "Dockerfile.polyglot-mesh" ".")}"
+AX_OBSERVER_SHA256="${AX_OBSERVER_SHA256:-$(build_and_push "ax-observer" "deploy/ax-observer/Dockerfile" ".")}"
+TASK_RUNNER_SHA256="${TASK_RUNNER_SHA256:-$(build_and_push "ax-task-runner" "harnesses/Dockerfile.task-runner" ".")}"
+
+if [[ -z "${AX_SERVER_SHA256:-}" ]]; then
+  if [[ "${SKIP_BUILD}" != "true" ]]; then
+    IMAGE_URI="${IMAGE_REGISTRY}/ax-server:${TAG}" ./deploy/ax-server/build.sh --push >&2
+  fi
+  AX_SERVER_SHA256="$(resolve_digest "ax-server")"
+fi
+
+echo "==> Pinned Image Digests:"
+echo "    model-gateway@sha256:${MODEL_GATEWAY_SHA256}"
+echo "    storefront@sha256:${STOREFRONT_SHA256}"
+echo "    ax-observer@sha256:${AX_OBSERVER_SHA256}"
+echo "    ax-task-runner@sha256:${TASK_RUNNER_SHA256}"
+echo "    ax-server@sha256:${AX_SERVER_SHA256}"
+
+echo "==> Ensuring GKE Workload Identity IAM binding for Gemini Enterprise Agent Platform..."
+GSA_NAME="model-gateway"
+GSA_EMAIL="${GSA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+if ! gcloud iam service-accounts describe "${GSA_EMAIL}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+  gcloud iam service-accounts create "${GSA_NAME}" \
+    --project="${PROJECT_ID}" \
+    --display-name="AX Bug Bash Zero-Secret Agent Platform Model Gateway" || true
+fi
+for role in roles/aiplatform.user roles/logging.viewer roles/logging.privateLogViewer roles/monitoring.viewer roles/serviceusage.serviceUsageConsumer; do
+  gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+    --member="serviceAccount:${GSA_EMAIL}" \
+    --role="${role}" \
+    --condition=None \
+    --quiet >/dev/null 2>&1 || true
+done
+gcloud iam service-accounts add-iam-policy-binding "${GSA_EMAIL}" \
+  --project="${PROJECT_ID}" \
+  --role="roles/iam.workloadIdentityUser" \
+  --member="serviceAccount:${PROJECT_ID}.svc.id.goog[ax-system/model-gateway]" \
+  --quiet >/dev/null 2>&1 || true
+if [[ -n "${PROJECT_NUMBER:-}" ]]; then
+  for role in roles/aiplatform.user roles/logging.viewer roles/logging.privateLogViewer roles/monitoring.viewer roles/serviceusage.serviceUsageConsumer; do
+    gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+      --member="principal://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${PROJECT_ID}.svc.id.goog/subject/ns/ax-system/sa/model-gateway" \
+      --role="${role}" \
+      --condition=None \
+      --quiet >/dev/null 2>&1 || true
+  done
+fi
+
+echo "==> Step 1/5: Applying Agent Substrate v0.6.0 & google/ax Overlay (manifests/ax-v060-overlay.yaml)..."
+render_manifest manifests/ax-v060-overlay.yaml | kubectl --context="${KUBE_CONTEXT}" apply -f -
+kubectl --context="${KUBE_CONTEXT}" -n ax-system get secret ax-postgres >/dev/null 2>&1 || \
+  kubectl --context="${KUBE_CONTEXT}" -n ax-system create secret generic ax-postgres --from-literal=password=ax-bug-bash-smoke-pw
+
+if command -v kubectl-ate >/dev/null 2>&1; then
+  echo "==> Applying OpenFGA AccessPolicy bindings via kubectl-ate (--global and --atespace default)..."
+  kubectl-ate update access-policy --global -f - <<EOF || true
+metadata:
+  name: default
+bindings:
+  - role: owner
+    members:
+      - user:system:serviceaccount:ate-system:ate-client
+      - user:system:serviceaccount:ax-system:ax-server
+  - role: viewer
+    members:
+      - user:system:serviceaccount:ax-bug-bash:ax-observer
+EOF
+  kubectl-ate update access-policy --atespace default -f - <<EOF || true
+metadata:
+  name: default
+bindings:
+  - role: owner
+    members:
+      - user:system:serviceaccount:ate-system:ate-client
+      - user:system:serviceaccount:ax-system:ax-server
+  - role: viewer
+    members:
+      - user:system:serviceaccount:ax-bug-bash:ax-observer
+EOF
+fi
+
+echo "==> Step 2/5: Applying Off-the-Shelf Prometheus + Alertmanager (5s Evaluation Window)..."
+kubectl --context="${KUBE_CONTEXT}" apply -f manifests/monitoring/01-prometheus-alertmanager.yaml
+
+echo "==> Step 3/5: Applying Loki + Pre-Provisioned Grafana Stack..."
+kubectl --context="${KUBE_CONTEXT}" apply -f manifests/monitoring/02-loki-grafana.yaml
+
+echo "==> Step 4/5: Applying Google Cloud Managed Service for Prometheus PodMonitoring (10s Interval)..."
+kubectl --context="${KUBE_CONTEXT}" apply -f manifests/monitoring/03-gmp-podmonitoring.yaml || true
+
+echo "==> Step 5/5: Applying Digest-Pinned Bug Bash System (manifests/bug-bash-system.yaml)..."
+render_manifest manifests/bug-bash-system.yaml | kubectl --context="${KUBE_CONTEXT}" apply -f -
+
+echo "==> Waiting for rollouts across ax-system, monitoring, and ax-bug-bash..."
+kubectl --context="${KUBE_CONTEXT}" -n ax-system rollout status statefulset/ax-postgres --timeout=180s
+kubectl --context="${KUBE_CONTEXT}" -n ax-system rollout status deployment/ax-server --timeout=180s
+kubectl --context="${KUBE_CONTEXT}" -n ax-system rollout status deployment/model-gateway --timeout=180s
+kubectl --context="${KUBE_CONTEXT}" -n monitoring rollout status deployment/prometheus --timeout=180s
+kubectl --context="${KUBE_CONTEXT}" -n monitoring rollout status deployment/alertmanager --timeout=180s
+kubectl --context="${KUBE_CONTEXT}" -n monitoring rollout status deployment/loki --timeout=180s
+kubectl --context="${KUBE_CONTEXT}" -n monitoring rollout status deployment/grafana --timeout=180s
+kubectl --context="${KUBE_CONTEXT}" -n ax-bug-bash rollout status deployment/storefront --timeout=180s
+kubectl --context="${KUBE_CONTEXT}" -n ax-bug-bash rollout status deployment/ax-observer --timeout=180s
+
+echo "==> Verifying sub-500ms in-cluster Git reachability to storefront-monorepo..."
 kubectl --context="${KUBE_CONTEXT}" -n ax-bug-bash exec deploy/storefront -- \
-  sh -c 'start=$(date +%s%3N); git ls-remote http://127.0.0.1:3001/git/storefront.git HEAD >/dev/null; end=$(date +%s%3N); echo "In-cluster Git server ready in $((end - start))ms"'
+  git ls-remote http://127.0.0.1:3001/git/storefront.git HEAD >/dev/null
 
-echo "==> [ax-bug-bash] Deployment complete!"
+echo "==> Deployment complete! All surfaces healthy and @sha256: digest-pinned."

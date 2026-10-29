@@ -12,14 +12,37 @@ import urllib.request
 WORKSPACE = os.environ.get("WORKSPACE_DIR", "/workspace")
 TASK_NAME = os.environ.get("AX_TASK_NAME", os.environ.get("SESSION_ID", "default-task"))
 GATEWAY_BASE = os.environ.get("GATEWAY_BASE_URL", "http://model-gateway.ax-system.svc.cluster.local:8080").rstrip("/")
-OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", f"{GATEWAY_BASE}/s/{TASK_NAME}/v1").rstrip("/")
+def resolve_openai_base_url() -> str:
+    explicit = os.environ.get("OPENAI_BASE_URL", "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    cfg_path = os.environ.get("OPENCODE_CONFIG", "").strip()
+    if cfg_path and os.path.isfile(cfg_path):
+        try:
+            with open(cfg_path, "r", encoding="utf-8") as fh:
+                cfg = json.load(fh)
+            base = (
+                cfg.get("provider", {})
+                .get("agent-platform-gateway", {})
+                .get("options", {})
+                .get("baseURL", "")
+            )
+            if base:
+                return str(base).rstrip("/")
+        except Exception:
+            pass
+    return f"{GATEWAY_BASE}/s/{TASK_NAME}/v1"
+
+
+OPENAI_BASE_URL = resolve_openai_base_url()
 MODEL = os.environ.get("AGENT_MODEL", "gemini-3.8-flash")
 SANDBOX_TOKEN = os.environ.get("OPENAI_API_KEY", "ax-sandbox-token")
 
 SYSTEM_PROMPT = (
     "You are OpenCode (opencode-ai), an autonomous coding agent running inside a google/ax + Agent Substrate v0.6.0 sandbox in /workspace. "
     "Follow strict Red-Green TDD: first write a failing Regression Test reproducing the production 500 error, "
-    "then patch the microservice until all tests pass."
+    "then patch the microservice until all tests pass. "
+    "Emit updated files inside `<file path=\"relative/path\">...content...</file>` blocks."
 )
 
 TOOLS = [
@@ -119,12 +142,14 @@ def run_opencode_turn(prompt: str) -> str:
     ]
     url = f"{OPENAI_BASE_URL}/chat/completions"
 
+    single_shot_file_phase = "PHASE=REPRODUCE_RED" in prompt or "PHASE=PATCH_GREEN" in prompt
     for _ in range(6):
         payload = {
             "model": MODEL,
             "messages": messages,
-            "tools": TOOLS,
         }
+        if not single_shot_file_phase:
+            payload["tools"] = TOOLS
         req = urllib.request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),
@@ -174,12 +199,27 @@ def run_opencode_turn(prompt: str) -> str:
     return "(max tool iterations reached)"
 
 
+def parse_prompt_args(argv: list[str]) -> str:
+    filtered = []
+    skip_next = False
+    for idx, arg in enumerate(argv):
+        if skip_next:
+            skip_next = False
+            continue
+        if arg in ("-p", "--print", "--no-session", "run"):
+            continue
+        if arg in ("-m", "--model", "--provider", "--config") and idx + 1 < len(argv):
+            skip_next = True
+            continue
+        filtered.append(arg)
+    return "\n".join(filtered).strip()
+
+
 def main() -> int:
     os.makedirs(WORKSPACE, exist_ok=True)
     os.chdir(WORKSPACE)
 
-    args = [a for a in sys.argv[1:] if a not in ("-p", "--print", "run")]
-    prompt = " ".join(args).strip() or f"Execute TDD repair for {TASK_NAME}"
+    prompt = parse_prompt_args(sys.argv[1:]) or f"Execute TDD repair for {TASK_NAME}"
     print(run_opencode_turn(prompt))
     return 0
 

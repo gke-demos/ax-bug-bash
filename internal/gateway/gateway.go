@@ -236,6 +236,8 @@ func (s *Server) Config() Config {
 }
 
 // Handler returns the top-level http.Handler for the Model Gateway.
+// TODO(security): End-user login/cookies/file-uploads/SQL are intentionally absent; Model Gateway authenticates
+// strictly via GKE Workload Identity to Gemini Enterprise Agent Platform and accepts only cluster-internal sandbox traffic.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealthz)
@@ -247,7 +249,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/chat/completions", s.handleTopLevelRoute)
 	mux.HandleFunc("/v1beta/models/", s.handleTopLevelRoute)
 	mux.HandleFunc("/s/", s.handleSessionRoute)
-	return mux
+	return httputil.WithSecurityHeaders(mux)
 }
 
 // ServeHTTP implements http.Handler.
@@ -351,6 +353,7 @@ func (s *Server) dispatchSessionRequest(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<20)
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, "read_error", err.Error())

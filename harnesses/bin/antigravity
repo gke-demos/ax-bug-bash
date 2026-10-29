@@ -120,14 +120,15 @@ def apply_inline_blocks(reply: str) -> list[str]:
     return logs
 
 
-def run_turn(contents: list[dict]) -> str:
+def run_turn(contents: list[dict], single_shot_file_phase: bool = False) -> str:
     url = f"{BASE_URL}/v1beta/models/{MODEL}:generateContent"
     for _ in range(6):
         payload = {
             "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
             "contents": contents,
-            "tools": TOOLS,
         }
+        if not single_shot_file_phase:
+            payload["tools"] = TOOLS
         req = urllib.request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),
@@ -178,14 +179,30 @@ def run_turn(contents: list[dict]) -> str:
     return "(max tool iterations reached)"
 
 
+def parse_prompt_args(argv: list[str]) -> str:
+    filtered = []
+    skip_next = False
+    for idx, arg in enumerate(argv):
+        if skip_next:
+            skip_next = False
+            continue
+        if arg in ("-p", "--print", "--no-session", "run"):
+            continue
+        if arg in ("-m", "--model", "--provider", "--config") and idx + 1 < len(argv):
+            skip_next = True
+            continue
+        filtered.append(arg)
+    return "\n".join(filtered).strip()
+
+
 def main() -> int:
     os.makedirs(WORKSPACE, exist_ok=True)
     os.chdir(WORKSPACE)
 
-    args = [a for a in sys.argv[1:] if a not in ("-p", "--print", "run")]
-    prompt = " ".join(args).strip() or f"Execute TDD repair for {TASK_NAME}"
+    prompt = parse_prompt_args(sys.argv[1:]) or f"Execute TDD repair for {TASK_NAME}"
+    single_shot = "PHASE=REPRODUCE_RED" in prompt or "PHASE=PATCH_GREEN" in prompt
     contents = [{"role": "user", "parts": [{"text": prompt}]}]
-    print(run_turn(contents))
+    print(run_turn(contents, single_shot_file_phase=single_shot))
     return 0
 
 

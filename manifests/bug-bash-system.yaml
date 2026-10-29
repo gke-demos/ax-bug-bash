@@ -1,11 +1,245 @@
+# AX Bug Bash Tree — Core System & Three Decoupled Surfaces (ADR-0001..ADR-0011)
+# All container images are pinned to immutable @sha256: digests resolved by hack/deploy-gke.sh
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ax-postgres
+  namespace: ax-system
+  labels:
+    app.kubernetes.io/name: ax-postgres
+    app.kubernetes.io/part-of: ax-bug-bash
+spec:
+  replicas: 1
+  serviceName: ax-postgres
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ax-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ax-postgres
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          env:
+            - name: POSTGRES_USER
+              value: ax
+            - name: POSTGRES_DB
+              value: ax
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ax-postgres
+                  key: password
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+              name: postgres
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "ax", "-d", "ax"]
+            periodSeconds: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: ax-postgres
+          app.kubernetes.io/part-of: ax
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ax-postgres
+  namespace: ax-system
+  labels:
+    app.kubernetes.io/name: ax-postgres
+    app.kubernetes.io/part-of: ax-bug-bash
+spec:
+  ports:
+    - port: 5432
+      targetPort: 5432
+      name: postgres
+  selector:
+    app.kubernetes.io/name: ax-postgres
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ax-server
+  namespace: ax-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ax-server
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ax-server
+subjects:
+  - kind: ServiceAccount
+    name: ax-server
+    namespace: ax-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ax-server
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ax-server
+  namespace: ax-system
+  labels:
+    app.kubernetes.io/name: ax-server
+    app.kubernetes.io/part-of: ax-bug-bash
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ax-server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ax-server
+    spec:
+      serviceAccountName: ax-server
+      containers:
+        - name: ax-server
+          image: ${IMAGE_REGISTRY}/ax-server@sha256:${AX_SERVER_SHA256}
+          args:
+            - "--addr=:8080"
+            - "--store=postgres://ax@ax-postgres.ax-system.svc.cluster.local:5432/ax?sslmode=disable"
+            - "--substrate-endpoint=api.ate-system.svc.cluster.local:443"
+            - "--substrate-authority=api.ate-system.svc"
+            - "--substrate-token-file=/var/run/secrets/ateapi/token"
+            - "--substrate-ca-file=/run/servicedns-ca/trust-bundle.pem"
+            - "--template=default-template"
+            - "--template-atespace=ax-system"
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ax-postgres
+                  key: password
+            - name: ATENET_ROUTER_ADDR
+              value: "https://atenet-router.ate-system.svc.cluster.local:443"
+            - name: AX_DEFAULT_TASK_IMAGE
+              value: "${IMAGE_REGISTRY}/ax-task-runner@sha256:${TASK_RUNNER_SHA256}"
+            - name: AX_SNAPSHOTS_BUCKET
+              value: "gs://${AX_SNAPSHOTS_BUCKET}/ax-bug-bash/"
+            - name: AX_AUTO_ACTOR_EGRESS
+              value: "true"
+          ports:
+            - containerPort: 8080
+              name: http
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - mountPath: /var/run/secrets/ateapi
+              name: ate-token
+              readOnly: true
+            - mountPath: /run/servicedns-ca
+              name: servicedns-ca
+              readOnly: true
+            - mountPath: /run/podidentity.podcert.ate.dev
+              name: podidentity
+              readOnly: true
+      volumes:
+        - name: ate-token
+          projected:
+            defaultMode: 420
+            sources:
+              - serviceAccountToken:
+                  audience: api.ate-system.svc
+                  expirationSeconds: 7200
+                  path: token
+        - name: servicedns-ca
+          projected:
+            defaultMode: 420
+            sources:
+              - clusterTrustBundle:
+                  labelSelector:
+                    matchLabels:
+                      podcert.ate.dev/canarying: live
+                  path: trust-bundle.pem
+                  signerName: servicedns.podcert.ate.dev/identity
+        - name: podidentity
+          projected:
+            defaultMode: 420
+            sources:
+              - podCertificate:
+                  credentialBundlePath: credential-bundle.pem
+                  keyType: ECDSAP256
+                  signerName: podidentity.podcert.ate.dev/identity
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ax-server
+  namespace: ax-system
+  labels:
+    app.kubernetes.io/name: ax-server
+    app.kubernetes.io/part-of: ax-bug-bash
+spec:
+  ports:
+    - port: 80
+      targetPort: 8080
+      name: grpc-80
+    - port: 8080
+      targetPort: 8080
+      name: grpc-8080
+  selector:
+    app.kubernetes.io/name: ax-server
+---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: model-gateway
   namespace: ax-system
-  labels:
-    app.kubernetes.io/name: model-gateway
-    app.kubernetes.io/part-of: ax-bug-bash
+  annotations:
+    iam.gke.io/gcp-service-account: model-gateway@${PROJECT_ID}.iam.gserviceaccount.com
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -14,7 +248,6 @@ metadata:
   namespace: ax-system
   labels:
     app: model-gateway
-    app.kubernetes.io/name: model-gateway
     app.kubernetes.io/part-of: ax-bug-bash
 spec:
   replicas: 1
@@ -25,21 +258,22 @@ spec:
     metadata:
       labels:
         app: model-gateway
-        app.kubernetes.io/part-of: ax-bug-bash
     spec:
       serviceAccountName: model-gateway
       containers:
         - name: model-gateway
-          image: ${IMAGE_REGISTRY}/model-gateway:latest
+          image: ${IMAGE_REGISTRY}/model-gateway@sha256:${MODEL_GATEWAY_SHA256}
           env:
             - name: LISTEN_ADDR
               value: ":8080"
+            - name: PROJECT_ID
+              value: "${PROJECT_ID}"
             - name: AGENT_PLATFORM_LOCATION
               value: "global"
             - name: GEMINI_FALLBACK_CASCADE
               value: "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash"
             - name: ENABLE_FIXTURE_FALLBACK
-              value: "true"
+              value: "false"
           ports:
             - name: http
               containerPort: 8080
@@ -47,17 +281,17 @@ spec:
             httpGet:
               path: /readyz
               port: 8080
-            initialDelaySeconds: 2
-            periodSeconds: 5
+            initialDelaySeconds: 1
+            periodSeconds: 3
           livenessProbe:
             httpGet:
               path: /healthz
               port: 8080
-            initialDelaySeconds: 5
+            initialDelaySeconds: 3
             periodSeconds: 10
           resources:
             requests:
-              cpu: 100m
+              cpu: 50m
               memory: 128Mi
             limits:
               cpu: 500m
@@ -68,17 +302,18 @@ kind: Service
 metadata:
   name: model-gateway
   namespace: ax-system
-  labels:
-    app: model-gateway
-    app.kubernetes.io/part-of: ax-bug-bash
 spec:
   selector:
     app: model-gateway
   ports:
-    - name: http
+    - name: http-80
+      port: 80
+      targetPort: 8080
+    - name: http-8080
       port: 8080
       targetPort: 8080
 ---
+# Surface 1: 5-Service Polyglot Retail Storefront + Canonical In-Cluster Git Server (ADR-0003, ADR-0009)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -86,8 +321,8 @@ metadata:
   namespace: ax-bug-bash
   labels:
     app: retail-storefront
-    app.kubernetes.io/name: storefront
     app.kubernetes.io/part-of: ax-bug-bash
+    monitoring-target: retail-storefront
 spec:
   replicas: 1
   selector:
@@ -97,46 +332,84 @@ spec:
     metadata:
       labels:
         app: retail-storefront
-        app.kubernetes.io/name: storefront
         app.kubernetes.io/part-of: ax-bug-bash
-      annotations:
-        logging.googleapis.com/structured-json: "true"
+        monitoring-target: retail-storefront
     spec:
       containers:
         - name: storefront
-          image: ${IMAGE_REGISTRY}/storefront:latest
+          image: ${IMAGE_REGISTRY}/storefront@sha256:${STOREFRONT_SHA256}
+          command: ["/usr/local/bin/polyglot-supervisor"]
+          args:
+            - "--mesh"
+            - "--services-dir=/opt/ax-bug-bash/services"
+            - "--work-dir=/var/lib/storefront-work"
+            - "--git-work-dir=/var/lib/storefront-git"
+            - "--git-addr=0.0.0.0:8090"
+            - "--git-daemon-addr=0.0.0.0:9418"
           env:
+            - name: POLYGLOT_MESH_ALL
+              value: "true"
             - name: STOREFRONT_ADDR
               value: "0.0.0.0:3001"
             - name: STOREFRONT_GIT_DIR
               value: "/var/lib/storefront-git"
+            - name: STOREFRONT_SERVICES_DIR
+              value: "/opt/ax-bug-bash/services"
+            - name: LOKI_PUSH_URL
+              value: "http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push"
+            - name: PRICING_SERVICE_URL
+              value: "http://pricing-service.ax-bug-bash.svc.cluster.local:8083"
+            - name: INVENTORY_SERVICE_URL
+              value: "http://inventory-service.ax-bug-bash.svc.cluster.local:8084"
+            - name: SHIPPING_SERVICE_URL
+              value: "http://shipping-service.ax-bug-bash.svc.cluster.local:8082"
+            - name: CHECKOUT_SERVICE_URL
+              value: "http://checkout-service.ax-bug-bash.svc.cluster.local:8081"
+            - name: STOREFRONT_GIT_HTTP_URL
+              value: "http://storefront-git.ax-bug-bash.svc.cluster.local:8090"
           ports:
-            - name: http
+            - name: http-web
               containerPort: 3001
+            - name: http-checkout
+              containerPort: 8081
+            - name: http-shipping
+              containerPort: 8082
+            - name: http-pricing
+              containerPort: 8083
+            - name: http-inventory
+              containerPort: 8084
+            - name: http
+              containerPort: 8090
+            - name: git-daemon
+              containerPort: 9418
           readinessProbe:
             httpGet:
               path: /readyz
               port: 3001
-            initialDelaySeconds: 1
+            initialDelaySeconds: 2
             periodSeconds: 3
           livenessProbe:
             httpGet:
               path: /healthz
               port: 3001
-            initialDelaySeconds: 3
+            initialDelaySeconds: 5
             periodSeconds: 10
           volumeMounts:
             - name: git-workspace
               mountPath: /var/lib/storefront-git
+            - name: work-workspace
+              mountPath: /var/lib/storefront-work
           resources:
             requests:
-              cpu: 200m
-              memory: 256Mi
-            limits:
-              cpu: 1000m
+              cpu: 250m
               memory: 512Mi
+            limits:
+              cpu: 2000m
+              memory: 2Gi
       volumes:
         - name: git-workspace
+          emptyDir: {}
+        - name: work-workspace
           emptyDir: {}
 ---
 apiVersion: v1
@@ -144,9 +417,25 @@ kind: Service
 metadata:
   name: storefront
   namespace: ax-bug-bash
-  labels:
+spec:
+  selector:
     app: retail-storefront
-    app.kubernetes.io/part-of: ax-bug-bash
+  ports:
+    - name: http
+      port: 3001
+      targetPort: 3001
+    - name: git-http
+      port: 8090
+      targetPort: 8090
+    - name: git-daemon
+      port: 9418
+      targetPort: 9418
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: retail-storefront
+  namespace: ax-bug-bash
 spec:
   selector:
     app: retail-storefront
@@ -158,27 +447,90 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: retail-storefront
+  name: storefront-web
   namespace: ax-bug-bash
-  labels:
+spec:
+  selector:
     app: retail-storefront
-    app.kubernetes.io/part-of: ax-bug-bash
+  ports:
+    - name: http-web
+      port: 3001
+      targetPort: 3001
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: checkout-service
+  namespace: ax-bug-bash
+spec:
+  selector:
+    app: retail-storefront
+  ports:
+    - name: http-checkout
+      port: 8081
+      targetPort: 8081
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shipping-service
+  namespace: ax-bug-bash
+spec:
+  selector:
+    app: retail-storefront
+  ports:
+    - name: http-shipping
+      port: 8082
+      targetPort: 8082
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pricing-service
+  namespace: ax-bug-bash
+spec:
+  selector:
+    app: retail-storefront
+  ports:
+    - name: http-pricing
+      port: 8083
+      targetPort: 8083
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: inventory-service
+  namespace: ax-bug-bash
+spec:
+  selector:
+    app: retail-storefront
+  ports:
+    - name: http-inventory
+      port: 8084
+      targetPort: 8084
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: storefront-git
+  namespace: ax-bug-bash
 spec:
   selector:
     app: retail-storefront
   ports:
     - name: http
-      port: 3001
-      targetPort: 3001
+      port: 8090
+      targetPort: 8090
+    - name: git-daemon
+      port: 9418
+      targetPort: 9418
 ---
+# Surface 3: AX Observer Control Room + Bug Bash Orchestrator (ADR-0004, ADR-0005, ADR-0008, ADR-0010)
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: ax-observer
   namespace: ax-bug-bash
-  labels:
-    app.kubernetes.io/name: ax-observer
-    app.kubernetes.io/part-of: ax-bug-bash
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -187,7 +539,6 @@ metadata:
   namespace: ax-bug-bash
   labels:
     app: ax-observer
-    app.kubernetes.io/name: ax-observer
     app.kubernetes.io/part-of: ax-bug-bash
 spec:
   replicas: 1
@@ -198,28 +549,52 @@ spec:
     metadata:
       labels:
         app: ax-observer
-        app.kubernetes.io/part-of: ax-bug-bash
     spec:
       serviceAccountName: ax-observer
       containers:
         - name: ax-observer
-          image: ${IMAGE_REGISTRY}/ax-observer:latest
+          image: ${IMAGE_REGISTRY}/ax-observer@sha256:${AX_OBSERVER_SHA256}
           env:
             - name: LISTEN_ADDR
               value: "0.0.0.0:3000"
+            - name: OBSERVER_ADDR
+              value: "0.0.0.0:3000"
             - name: ALL_IN_ONE
               value: "false"
+            - name: EXECUTION_MODE
+              value: "LIVE_GKE"
+            - name: AX_EXECUTION_MODE
+              value: "LIVE_GKE"
             - name: STOREFRONT_URL
               value: "http://storefront.ax-bug-bash.svc.cluster.local:3001"
             - name: STOREFRONT_GIT_URL
-              value: "http://storefront.ax-bug-bash.svc.cluster.local:3001/git/storefront.git"
+              value: "http://storefront-git.ax-bug-bash.svc.cluster.local:8090/git/storefront.git"
+            - name: STOREFRONT_PUBLIC_URL
+              value: "http://127.0.0.1:3001"
+            - name: GRAFANA_PUBLIC_URL
+              value: "http://127.0.0.1:3002"
+            - name: PROMETHEUS_URL
+              value: "http://prometheus.monitoring.svc.cluster.local:9090"
+            - name: ALERTMANAGER_URL
+              value: "http://alertmanager.monitoring.svc.cluster.local:9093"
+            - name: LOKI_URL
+              value: "http://loki.monitoring.svc.cluster.local:3100"
+            - name: AX_SERVER_ADDR
+              value: "ax-server.ax-system.svc.cluster.local:8080"
             - name: MODEL_GATEWAY_URL
               value: "http://model-gateway.ax-system.svc.cluster.local:8080"
-            - name: AX_SERVER_ADDR
-              value: "ax-server.ax-system.svc.cluster.local:9090"
-            # Agent Substrate v0.6.0 requires task-runner images with SnapshotConfig to be pinned by @sha256: digest
             - name: AX_DEFAULT_TASK_IMAGE
               value: "${IMAGE_REGISTRY}/ax-task-runner@sha256:${TASK_RUNNER_SHA256}"
+            - name: TASK_RUNNER_IMAGE
+              value: "${IMAGE_REGISTRY}/ax-task-runner@sha256:${TASK_RUNNER_SHA256}"
+            - name: OBSERVER_CALLBACK_URL
+              value: "http://ax-observer.ax-bug-bash.svc.cluster.local:3000/api/internal/observer-events"
+            - name: SUBSTRATE_CONTROL_ADDR
+              value: "api.ate-system.svc.cluster.local:443"
+            - name: SUBSTRATE_TOKEN_FILE
+              value: "/var/run/secrets/ateapi/token"
+            - name: SUBSTRATE_CA_FILE
+              value: "/run/servicedns-ca/trust-bundle.pem"
           ports:
             - name: http
               containerPort: 3000
@@ -227,34 +602,60 @@ spec:
             httpGet:
               path: /readyz
               port: 3000
-            initialDelaySeconds: 2
-            periodSeconds: 5
+            initialDelaySeconds: 1
+            periodSeconds: 3
           livenessProbe:
             httpGet:
               path: /healthz
               port: 3000
-            initialDelaySeconds: 5
+            initialDelaySeconds: 3
             periodSeconds: 10
+          volumeMounts:
+            - mountPath: /var/run/secrets/ateapi
+              name: ate-token
+              readOnly: true
+            - mountPath: /run/servicedns-ca
+              name: servicedns-ca
+              readOnly: true
           resources:
             requests:
-              cpu: 200m
-              memory: 256Mi
+              cpu: 100m
+              memory: 128Mi
             limits:
               cpu: 1000m
               memory: 512Mi
+      volumes:
+        - name: ate-token
+          projected:
+            defaultMode: 420
+            sources:
+              - serviceAccountToken:
+                  audience: api.ate-system.svc
+                  expirationSeconds: 7200
+                  path: token
+        - name: servicedns-ca
+          projected:
+            defaultMode: 420
+            sources:
+              - clusterTrustBundle:
+                  labelSelector:
+                    matchLabels:
+                      podcert.ate.dev/canarying: live
+                  path: trust-bundle.pem
+                  signerName: servicedns.podcert.ate.dev/identity
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: ax-observer
   namespace: ax-bug-bash
-  labels:
-    app: ax-observer
-    app.kubernetes.io/part-of: ax-bug-bash
 spec:
   selector:
     app: ax-observer
   ports:
     - name: http
       port: 3000
+      targetPort: 3000
+    - name: http-8080
+      port: 8080
       targetPort: 3000

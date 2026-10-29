@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Apex Hardware — Polyglot Retail Storefront</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path>
+        <line x1="3" y1="6" x2="21" y2="6"></line>
+        <path d="M16 10a4 4 0 0 1-8 0"></path>
+      </svg>
+      <div>
+        <span class="brand-title">Apex Hardware Storefront</span>
+        <span class="brand-subtitle">5-Service Polyglot Retail Application (Node.js · Go · Python · Rust)</span>
+      </div>
+    </div>
+
+    <div class="topbar-actions">
+      <div class="currency-group" role="group" aria-label="Currency selector">
+        <button type="button" class="currency-btn active" data-currency="USD">USD ($)</button>
+        <button type="button" class="currency-btn" data-currency="EUR">EUR (€)</button>
+        <button type="button" class="currency-btn" data-currency="JPY">JPY (¥)</button>
+      </div>
+
+      <button type="button" id="open-incident-modal" class="cmd-btn" title="Incident Scenario Controls (Cmd+K)">
+        <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+        </svg>
+        <span>Scenarios</span>
+        <kbd>⌘K</kbd>
+      </button>
+
+      <div class="theme-toggle" role="group" aria-label="Projector theme mode">
+        <button type="button" id="theme-dark-btn" class="theme-seg active" aria-label="Dark mode" title="Dark Mode">
+          <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+          </svg>
+        </button>
+        <button type="button" id="theme-light-btn" class="theme-seg" aria-label="Projector Light mode" title="Projector Light Mode">
+          <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <circle cx="12" cy="12" r="5"></circle>
+            <line x1="12" y1="1" x2="12" y2="3"></line>
+            <line x1="12" y1="21" x2="12" y2="23"></line>
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+            <line x1="1" y1="12" x2="3" y2="12"></line>
+            <line x1="21" y1="12" x2="23" y2="12"></line>
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <section class="service-strip" id="service-strip" aria-label="Polyglot backend health"></section>
+
+  <section id="error-banner" class="error-banner hidden" role="alert"></section>
+
+  <main class="store-layout">
+    <section class="catalog-section">
+      <div class="section-header">
+        <h1>Developer Hardware &amp; Field Power</h1>
+        <p class="muted">Select items or activate an Incident Scenario to observe real HTTP 500 stack traces across microservices.</p>
+      </div>
+      <div id="product-grid" class="product-grid"></div>
+    </section>
+
+    <aside class="cart-panel">
+      <h2>Order Summary &amp; Checkout</h2>
+      <div id="cart-items" class="cart-items"></div>
+
+      <div class="promo-section">
+        <span class="label">Promo Codes (Stackable)</span>
+        <div class="promo-pills">
+          <button type="button" class="promo-pill" data-promo="SAVE20">SAVE20 (20% Off)</button>
+          <button type="button" class="promo-pill" data-promo="FLAT15">FLAT15 ($15 Off)</button>
+        </div>
+      </div>
+
+      <div class="bundle-row">
+        <label class="checkbox-label">
+          <input type="checkbox" id="flash-bundle-toggle" />
+          <span>Apply Flash-Sale 2-for-1 Bonus Allocation</span>
+        </label>
+      </div>
+
+      <button type="button" id="checkout-btn" class="primary-btn">Place Order (POST /api/cart/checkout)</button>
+      <div id="checkout-result" class="checkout-result"></div>
+    </aside>
+  </main>
+
+  <div id="incident-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="modal-title">Production Incident Scenario Controls</h3>
+        <button type="button" id="close-incident-modal" class="icon-btn" aria-label="Close modal">×</button>
+      </div>
+      <p class="muted">All 5 microservices pass baseline happy-path unit tests. Trigger a subtle multi-service runtime edge case or randomize an incident:</p>
+      <div id="scenario-list" class="scenario-list"></div>
+      <div class="modal-footer">
+        <button type="button" id="randomize-incident-btn" class="secondary-btn">Randomize Incident</button>
+        <button type="button" id="heal-incident-btn" class="secondary-btn">Reset / Heal All Services</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -54,6 +54,9 @@ type ChildTaskResult struct {
 	RegressionTestDiff string         `json:"regression_test_diff"`
 	CodeFixDiff        string         `json:"code_fix_diff"`
 	UnifiedGitDiff     string         `json:"unified_git_diff"`
+	BranchName         string         `json:"branch_name,omitempty"`
+	CommitSHA          string         `json:"commit_sha,omitempty"`
+	AttemptCount       int            `json:"attempt_count,omitempty"`
 	TDDSteps           []TDDStepEvent `json:"tdd_steps"`
 	ExitCode           int            `json:"exit_code"`
 	Suspended          bool           `json:"suspended"`

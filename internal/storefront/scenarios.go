@@ -6,7 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
+
+// BaselineGitTag is the canonical initial Git tag on storefront.git used for < 3s resets.
+const BaselineGitTag = "baseline-v1"
 
 const (
 	IncidentStackedPromoNegativeSubtotal = "INC-101"
@@ -906,19 +910,27 @@ func GetScenario(id string) (IncidentScenario, bool) {
 
 // SeedServicesTree copies the 5-service monorepo (and root go.mod) into destRoot.
 func SeedServicesTree(destRoot string) error {
-	_, callerFile, _, ok := runtime.Caller(0)
-	if !ok {
-		return fmt.Errorf("failed to resolve caller path")
+	srcServices := strings.TrimSpace(os.Getenv("STOREFRONT_SERVICES_DIR"))
+	if srcServices != "" {
+		if st, err := os.Stat(srcServices); err != nil || !st.IsDir() {
+			srcServices = ""
+		}
 	}
-	srcRepoRoot := filepath.Clean(filepath.Join(filepath.Dir(callerFile), "..", ".."))
-	srcServices := filepath.Join(srcRepoRoot, "services")
+	if srcServices == "" {
+		_, callerFile, _, ok := runtime.Caller(0)
+		if !ok {
+			return fmt.Errorf("failed to resolve caller path")
+		}
+		srcRepoRoot := filepath.Clean(filepath.Join(filepath.Dir(callerFile), "..", ".."))
+		srcServices = filepath.Join(srcRepoRoot, "services")
+	}
 	dstServices := filepath.Join(destRoot, "services")
 
 	if err := copyDirRecursive(srcServices, dstServices); err != nil {
 		return fmt.Errorf("copying services tree: %w", err)
 	}
 
-	goModContent := "module github.com/gke-demos/ax-bug-bash\n\ngo 1.27.1\n"
+	goModContent := "module github.com/gke-demos/ax-bug-bash\n\ngo 1.23\n"
 	if err := os.WriteFile(filepath.Join(destRoot, "go.mod"), []byte(goModContent), 0o644); err != nil {
 		return fmt.Errorf("writing workspace go.mod: %w", err)
 	}
@@ -934,10 +946,13 @@ func copyDirRecursive(srcDir, dstDir string) error {
 		return err
 	}
 	for _, entry := range entries {
-		srcPath := filepath.Join(srcDir, entry.Name())
-		dstPath := filepath.Join(dstDir, entry.Name())
+		name := entry.Name()
 		if entry.IsDir() {
-			if err := copyDirRecursive(srcPath, dstPath); err != nil {
+			switch name {
+			case "node_modules", "target", "__pycache__", ".pytest_cache", "bin":
+				continue
+			}
+			if err := copyDirRecursive(filepath.Join(srcDir, name), filepath.Join(dstDir, name)); err != nil {
 				return err
 			}
 			continue
@@ -946,7 +961,7 @@ func copyDirRecursive(srcDir, dstDir string) error {
 		if err != nil {
 			return err
 		}
-		if err := copyFile(srcPath, dstPath, info.Mode()); err != nil {
+		if err := copyFile(filepath.Join(srcDir, name), filepath.Join(dstDir, name), info.Mode()); err != nil {
 			return err
 		}
 	}
