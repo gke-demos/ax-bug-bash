@@ -310,6 +310,46 @@ func (m *GitWorkspaceManager) seedRepositoryLocked() error {
 	return nil
 }
 
+type bufferedResponseWriter struct {
+	header http.Header
+	code   int
+	body   bytes.Buffer
+}
+
+func (b *bufferedResponseWriter) Header() http.Header {
+	if b.header == nil {
+		b.header = make(http.Header)
+	}
+	return b.header
+}
+
+func (b *bufferedResponseWriter) WriteHeader(statusCode int) {
+	if b.code == 0 {
+		b.code = statusCode
+	}
+}
+
+func (b *bufferedResponseWriter) Write(p []byte) (int, error) {
+	if b.code == 0 {
+		b.code = http.StatusOK
+	}
+	return b.body.Write(p)
+}
+
+func (b *bufferedResponseWriter) flushTo(w http.ResponseWriter) {
+	for k, vals := range b.Header() {
+		for _, v := range vals {
+			w.Header().Add(k, v)
+		}
+	}
+	code := b.code
+	if code == 0 {
+		code = http.StatusOK
+	}
+	w.WriteHeader(code)
+	_, _ = w.Write(b.body.Bytes())
+}
+
 // ServeHTTP serves Smart HTTP Git requests under /git/storefront.git/*.
 func (m *GitWorkspaceManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	pathInfo := strings.TrimPrefix(r.URL.Path, "/git")
@@ -339,9 +379,10 @@ func (m *GitWorkspaceManager) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	rec := &bufferedResponseWriter{header: make(http.Header)}
 	m.mu.Lock()
 	oldMain := m.currentCommitSHALocked("refs/heads/main")
-	handler.ServeHTTP(w, rClone)
+	handler.ServeHTTP(rec, rClone)
 	newMain := m.currentCommitSHALocked("refs/heads/main")
 
 	var (
@@ -373,6 +414,7 @@ func (m *GitWorkspaceManager) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 			onMainUpdated(oldMain, newMain, modifiedSvcs)
 		}
 	}
+	rec.flushTo(w)
 }
 
 // GitServerConfig configures the standalone canonical storefront-git HTTP and Git server.

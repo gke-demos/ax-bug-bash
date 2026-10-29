@@ -6,6 +6,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
+export PATH="/usr/local/google/home/mofi/.local/go/bin:/usr/local/go/bin:${HOME}/go/bin:${HOME}/.cargo/bin:/tmp/bin:${PATH}"
+
 DRY_RUN=false
 SKIP_BUILD=false
 for arg in "$@"; do
@@ -36,9 +38,17 @@ if [[ "${DRY_RUN}" == "true" ]]; then
   TASK_RUNNER_SHA256="4444444444444444444444444444444444444444444444444444444444444444"
   AX_SERVER_SHA256="5555555555555555555555555555555555555555555555555555555555555555"
 else
-  PROJECT_NUMBER="${PROJECT_NUMBER:-$(gcloud projects describe "${PROJECT_ID}" --format="value(projectNumber)" 2>/dev/null || echo "")}"
+  PROJECT_NUMBER="${PROJECT_NUMBER:-$(gcloud projects list --filter="projectId=${PROJECT_ID}" --format="value(projectNumber)" 2>/dev/null || gcloud projects describe "${PROJECT_ID}" --format="value(projectNumber)" 2>/dev/null || echo "")}"
+  if ! gcloud artifacts repositories describe "${AR_REPO}" --location="${REGION}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+    gcloud artifacts repositories create "${AR_REPO}" \
+      --repository-format=docker \
+      --location="${REGION}" \
+      --project="${PROJECT_ID}" \
+      --quiet >/dev/null 2>&1 || AR_REPO="workshop"
+    IMAGE_REGISTRY="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}"
+  fi
   if [[ -z "${AX_SNAPSHOTS_BUCKET:-}" ]]; then
-    EXISTING_BUCKET="$(gcloud storage buckets list --project="${PROJECT_ID}" --format="value(name)" 2>/dev/null | awk '/ax-snapshots/ {print $0; exit}' || true)"
+    EXISTING_BUCKET="$(gcloud storage buckets list --project="${PROJECT_ID}" --format="value(name)" 2>/dev/null | awk '/ax-snapshots|-ate$/ {print $0; exit}' || true)"
     AX_SNAPSHOTS_BUCKET="${EXISTING_BUCKET:-${PROJECT_ID}-ax-snapshots-${PROJECT_NUMBER:-0}}"
   fi
   if [[ -z "${ATEWORKER_GVISOR_IMAGE:-}" ]]; then
@@ -126,7 +136,7 @@ if [[ "${SKIP_BUILD}" != "true" ]]; then
   mkdir -p bin/linux_amd64
   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/linux_amd64/ax-observer ./cmd/ax-observer
   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/linux_amd64/model-gateway ./cmd/model-gateway
-  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/linux_amd64/ax-task-runner ./cmd/ax-task-runner
+  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/linux_amd64/ax-task-runner ./cmd/ax-bug-bash-runner
   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/linux_amd64/polyglot-supervisor ./cmd/polyglot-supervisor
   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/linux_amd64/storefront-git ./cmd/storefront-git
 fi
@@ -158,35 +168,46 @@ if ! gcloud iam service-accounts describe "${GSA_EMAIL}" --project="${PROJECT_ID
     --project="${PROJECT_ID}" \
     --display-name="AX Bug Bash Zero-Secret Agent Platform Model Gateway" || true
 fi
-gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
-  --member="serviceAccount:${GSA_EMAIL}" \
-  --role="roles/aiplatform.user" \
-  --condition=None \
-  --quiet >/dev/null 2>&1 || true
+for role in roles/aiplatform.user roles/logging.viewer roles/logging.privateLogViewer roles/monitoring.viewer roles/serviceusage.serviceUsageConsumer; do
+  gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+    --member="serviceAccount:${GSA_EMAIL}" \
+    --role="${role}" \
+    --condition=None \
+    --quiet >/dev/null 2>&1 || true
+done
 gcloud iam service-accounts add-iam-policy-binding "${GSA_EMAIL}" \
   --project="${PROJECT_ID}" \
   --role="roles/iam.workloadIdentityUser" \
   --member="serviceAccount:${PROJECT_ID}.svc.id.goog[ax-system/model-gateway]" \
   --quiet >/dev/null 2>&1 || true
+if [[ -n "${PROJECT_NUMBER:-}" ]]; then
+  for role in roles/aiplatform.user roles/logging.viewer roles/logging.privateLogViewer roles/monitoring.viewer roles/serviceusage.serviceUsageConsumer; do
+    gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+      --member="principal://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${PROJECT_ID}.svc.id.goog/subject/ns/ax-system/sa/model-gateway" \
+      --role="${role}" \
+      --condition=None \
+      --quiet >/dev/null 2>&1 || true
+  done
+fi
 
 echo "==> Step 1/5: Applying Agent Substrate v0.6.0 & google/ax Overlay (manifests/ax-v060-overlay.yaml)..."
 render_manifest manifests/ax-v060-overlay.yaml | kubectl --context="${KUBE_CONTEXT}" apply -f -
+kubectl --context="${KUBE_CONTEXT}" -n ax-system get secret ax-postgres >/dev/null 2>&1 || \
+  kubectl --context="${KUBE_CONTEXT}" -n ax-system create secret generic ax-postgres --from-literal=password=ax-bug-bash-smoke-pw
 
 if command -v kubectl-ate >/dev/null 2>&1; then
   echo "==> Applying OpenFGA AccessPolicy bindings via kubectl-ate..."
-  kubectl-ate apply --global -f - <<EOF || true
-apiVersion: ate.dev/v1alpha1
-kind: AccessPolicy
+  kubectl-ate update access-policy --global -f - <<EOF || true
 metadata:
-  name: ax-server-global-owner
-spec:
-  bindings:
-    - role: owner
-      members:
-        - user:system:serviceaccount:ax-system:ax-server
-    - role: viewer
-      members:
-        - user:system:serviceaccount:ax-bug-bash:ax-observer
+  name: default
+bindings:
+  - role: owner
+    members:
+      - user:system:serviceaccount:ate-system:ate-client
+      - user:system:serviceaccount:ax-system:ax-server
+  - role: viewer
+    members:
+      - user:system:serviceaccount:ax-bug-bash:ax-observer
 EOF
 fi
 

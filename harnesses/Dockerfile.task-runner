@@ -2,12 +2,14 @@ FROM python:3.12-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     HOME=/root \
     WORKSPACE_DIR=/workspace \
     GOCACHE=/var/cache/ax-build/gocache \
     GOMODCACHE=/var/cache/ax-build/gomodcache \
     CARGO_HOME=/var/cache/ax-build/cargo \
+    CARGO_TARGET_DIR=/var/cache/ax-build/cargo-target \
     RUSTUP_HOME=/usr/local/rustup \
     VIRTUAL_ENV=/opt/ax-venv \
     NODE_PATH=/usr/local/lib/node_modules \
@@ -41,7 +43,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && /opt/ax-venv/bin/pip install --no-cache-dir google-antigravity pytest fastapi httpx pydantic \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /workspace /workspace/.ax-state /workspace/.ax \
-                /var/cache/ax-build/gocache /var/cache/ax-build/gomodcache /var/cache/ax-build/cargo \
+                /var/cache/ax-build/gocache /var/cache/ax-build/gomodcache /var/cache/ax-build/cargo /var/cache/ax-build/cargo-target \
                 /root/.config/opencode /root/.pi/agent \
     && rm -rf /ax && ln -s /workspace/.ax /ax \
     && chmod 1777 /tmp \
@@ -59,7 +61,7 @@ COPY harnesses/bin/opencode-harness /usr/local/bin/opencode-harness
 COPY harnesses/bin/pi-harness /usr/local/bin/pi-harness
 
 RUN printf "module github.com/gke-demos/ax-bug-bash\n\ngo 1.23\n" > /tmp/prewarm/go.mod \
-    && (cd /tmp/prewarm && go test -c -o /tmp/prewarm/checkout.test ./services/checkout-service/... && go test -c -o /tmp/prewarm/shipping.test ./services/shipping-service/...) \
+    && (cd /tmp/prewarm && go test -c -o /tmp/prewarm/checkout.test ./services/checkout-service && go test -c -o /tmp/prewarm/shipping.test ./services/shipping-service) \
     && (cd /tmp/prewarm/services/inventory-service && cargo test --no-run) \
     && /opt/ax-venv/bin/python3 -m compileall /tmp/prewarm/services/pricing-service \
     && node --check /tmp/prewarm/services/storefront-web/test/storefront.test.mjs \

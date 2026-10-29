@@ -177,7 +177,7 @@ func AnalyzeIncidentTraces(alert AlertPayload, workspaceDir string) (TriagePlan,
 			addDetected(svc)
 		}
 	}
-	if len(orderedDetected) == 0 && hasScenario {
+	if hasScenario {
 		for _, svc := range sc.ImplicatedServices {
 			addDetected(svc)
 		}
@@ -346,7 +346,10 @@ func SpawnChildTasksForTriage(
 		}
 
 		if _, err := axClient.CreateTask(ctx, &v1alpha1.CreateTaskRequest{Task: taskReq}); err != nil {
-			return nil, fmt.Errorf("CreateTask(%s): %w", mission.TaskName, err)
+			_, _ = axClient.DeleteTask(ctx, &v1alpha1.DeleteTaskRequest{Atespace: atespace, Name: mission.TaskName})
+			if _, err2 := axClient.CreateTask(ctx, &v1alpha1.CreateTaskRequest{Task: taskReq}); err2 != nil {
+				return nil, fmt.Errorf("CreateTask(%s): %w", mission.TaskName, err2)
+			}
 		}
 		resumed, err := axClient.ResumeTask(ctx, &v1alpha1.ResumeTaskRequest{
 			Atespace: atespace,

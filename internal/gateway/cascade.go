@@ -112,12 +112,13 @@ func (s *Server) ExecuteGeminiCascade(
 
 	for _, candidate := range candidates {
 		attemptStart := time.Now()
+		upstreamModel := resolveUpstreamModelID(base, candidate)
 		targetURL := fmt.Sprintf(
 			"%s/v1beta1/projects/%s/locations/%s/publishers/google/models/%s:%s",
 			base,
 			s.cfg.ProjectID,
 			s.cfg.Location,
-			candidate,
+			upstreamModel,
 			action,
 		)
 		if rawQuery != "" {
@@ -196,6 +197,22 @@ func (s *Server) ExecuteGeminiCascade(
 		StatusCode: lastStatus,
 		Attempts:   attempts,
 	}, fmt.Errorf("all models in Gemini Flash fallback cascade failed (%d attempts)", len(attempts))
+}
+
+func resolveUpstreamModelID(baseURL, candidate string) string {
+	if !strings.Contains(strings.ToLower(baseURL), "aiplatform.googleapis.com") {
+		return candidate
+	}
+	switch strings.TrimSpace(candidate) {
+	case "gemini-3.7-flash":
+		return "gemini-3-flash-preview"
+	case "gemini-3.6-flash":
+		return "gemini-2.5-flash"
+	case "gemini-3.5-flash":
+		return "gemini-2.5-flash-lite"
+	default:
+		return candidate
+	}
 }
 
 var (

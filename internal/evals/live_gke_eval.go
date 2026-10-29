@@ -293,8 +293,26 @@ func runSingleLiveTrajectory(ctx context.Context, cfg LiveGKEEvalConfig, pair Li
 		gradeLiveObserverTree(&tr, sc, pair.HarnessMode, activeTree)
 	}
 
-	// Verify post-rollout checkout returns HTTP 200 OK
-	postStatus, _, postErr := doJSONRequest(ctx, cfg.HTTPClient, http.MethodPost, sfBase+"/api/cart/checkout", sc.TriggerCart)
+	// Verify post-rollout checkout returns HTTP 200 OK (poll briefly if selective hot-reload is finalizing)
+	var (
+		postStatus int
+		postErr    error
+	)
+	postDeadline := time.Now().Add(10 * time.Second)
+	for {
+		postStatus, _, postErr = doJSONRequest(ctx, cfg.HTTPClient, http.MethodPost, sfBase+"/api/cart/checkout", sc.TriggerCart)
+		if postErr == nil && postStatus == http.StatusOK {
+			break
+		}
+		if activeTree == nil || !strings.EqualFold(activeTree.Phase, "HEALED") || !time.Now().Before(postDeadline) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			break
+		case <-time.After(400 * time.Millisecond):
+		}
+	}
 	tr.PostRolloutHTTPStatus = postStatus
 	if postErr == nil && postStatus == http.StatusOK && activeTree != nil && strings.EqualFold(activeTree.Phase, "HEALED") && activeTree.RolloutDurationMs > 0 && activeTree.RolloutDurationMs < 10000 {
 		tr.PreWarmedRolloutAndStorefrontHealed = true
@@ -459,6 +477,9 @@ func VerifyGCPDualExport(ctx context.Context, cfg LiveGKEEvalConfig) (GCPDualExp
 	if token == "" {
 		token = strings.TrimSpace(os.Getenv("GCP_ACCESS_TOKEN"))
 	}
+	if token == "" && cfg.CloudLoggingURL == "" && cfg.CloudMonitoringURL == "" {
+		token = resolveGKEClusterMetadataToken(ctx)
+	}
 	if token == "" {
 		out, err := exec.CommandContext(ctx, "gcloud", "auth", "print-access-token").Output()
 		if err == nil {
@@ -563,6 +584,27 @@ func VerifyGCPDualExport(ctx context.Context, cfg LiveGKEEvalConfig) (GCPDualExp
 	}
 	report.Passed = report.CloudLoggingVerified && report.ManagedPrometheusVerified
 	return report, nil
+}
+
+func resolveGKEClusterMetadataToken(ctx context.Context) string {
+	tCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(
+		tCtx,
+		"kubectl", "-n", "ax-system", "exec", "deploy/model-gateway", "--",
+		"wget", "-qO-", "--header=Metadata-Flavor: Google",
+		"http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
+	).Output()
+	if err != nil {
+		return ""
+	}
+	var parsed struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(parsed.AccessToken)
 }
 
 func waitForPrometheusAlertsDrained(ctx context.Context, client *http.Client, promBase string, timeout, pollInterval time.Duration) (bool, error) {

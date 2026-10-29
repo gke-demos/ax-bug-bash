@@ -665,7 +665,7 @@ func (o *Orchestrator) DispatchIncidentBugBash(ctx context.Context, req TriggerR
 		Metadata:   &v1alpha1.ObjectMeta{Name: rootTaskName, Atespace: "default"},
 		Spec: &v1alpha1.TaskSpec{
 			Image:   o.cfg.TaskRunnerImage,
-			Command: []string{"/usr/local/bin/ax-task-runner"},
+			Command: []string{"/usr/local/bin/ax-task-runner", "--execute-task"},
 			Env:     envVars,
 			Workspace: &v1alpha1.WorkspaceRef{
 				Name: DefaultWorkspaceName,
@@ -678,8 +678,11 @@ func (o *Orchestrator) DispatchIncidentBugBash(ctx context.Context, req TriggerR
 		},
 	}
 	if _, err := o.axClient.CreateTask(rpcCtx, &v1alpha1.CreateTaskRequest{Task: rootTaskSpec}); err != nil {
-		o.markExecutionFailed(execID, sc.ID, err)
-		return nil, fmt.Errorf("LIVE_GKE CreateTask(%s) failed: %w", rootTaskName, err)
+		_, _ = o.axClient.DeleteTask(rpcCtx, &v1alpha1.DeleteTaskRequest{Atespace: "default", Name: rootTaskName})
+		if _, err2 := o.axClient.CreateTask(rpcCtx, &v1alpha1.CreateTaskRequest{Task: rootTaskSpec}); err2 != nil {
+			o.markExecutionFailed(execID, sc.ID, err2)
+			return nil, fmt.Errorf("LIVE_GKE CreateTask(%s) failed: %w", rootTaskName, err2)
+		}
 	}
 	if _, err := o.axClient.ResumeTask(rpcCtx, &v1alpha1.ResumeTaskRequest{Atespace: "default", Name: rootTaskName}); err != nil {
 		o.markExecutionFailed(execID, sc.ID, err)

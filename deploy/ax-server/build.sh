@@ -8,7 +8,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-OUT_BIN="${1:-${REPO_ROOT}/bin/linux_amd64/ax-server}"
+PUSH_IMAGE="false"
+OUT_BIN="${REPO_ROOT}/bin/linux_amd64/ax-server"
+for arg in "$@"; do
+  if [[ "${arg}" == "--push" ]]; then
+    PUSH_IMAGE="true"
+  else
+    OUT_BIN="${arg}"
+  fi
+done
 PATCH_FILE="${SCRIPT_DIR}/ax-server-v061.patch"
 
 AX_UPSTREAM_DIR="${AX_UPSTREAM_DIR:-}"
@@ -53,3 +61,9 @@ fi
 )
 
 echo "Built patched ax-server binary at ${OUT_BIN}"
+
+if [[ "${PUSH_IMAGE}" == "true" && -n "${IMAGE_URI:-}" ]]; then
+  echo "Building and pushing ${IMAGE_URI}..."
+  docker build -f "${SCRIPT_DIR}/Dockerfile" -t "${IMAGE_URI}" "${REPO_ROOT}"
+  docker push "${IMAGE_URI}"
+fi

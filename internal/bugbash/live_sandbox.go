@@ -226,8 +226,8 @@ func ExecuteSandboxChildTask(ctx context.Context, opts SandboxChildOptions) (Chi
 			if cliOut != "" {
 				_, _ = extractAndWriteServiceFileBlocks(wsDir, mission.Service, cliOut)
 			}
-			// Ensure baseline production source was NOT patched prematurely during RED phase!
-			if len(baselineSrcBytes) > 0 {
+			// Ensure baseline production source was NOT patched prematurely during RED phase (when source and test are separate files)!
+			if absSrcPath != absTestPath && len(baselineSrcBytes) > 0 {
 				_ = os.WriteFile(absSrcPath, baselineSrcBytes, 0o644)
 			}
 			cleanStrayUntrackedOutsideService(wsDir, mission.Service)
@@ -339,6 +339,7 @@ func ExecuteSandboxChildTask(ctx context.Context, opts SandboxChildOptions) (Chi
 
 	// 7. Capture diff, commit ONLY services/<service> (never .ax-state/.ax), and push HEAD:refs/heads/fix/<task-name>.
 	phase3Start := time.Now()
+	cleanServiceBuildArtifacts(wsDir, mission.Service)
 	res.CodeFixDiff = CaptureWorkspaceGitDiff(wsDir, filepath.Join("services", mission.Service, detail.SourceFile))
 	res.UnifiedGitDiff = CaptureWorkspaceGitDiff(wsDir, filepath.Join("services", mission.Service))
 
@@ -388,7 +389,7 @@ func buildSandboxRedPrompt(mission ChildTaskMission, detail storefront.ServiceIn
 	base := fmt.Sprintf(
 		"PHASE=REPRODUCE_RED INCIDENT_ID=%s SERVICE=%s TARGET_FILE=%s\n"+
 			"[%s/%s] Author failing regression test %s in %s reproducing HTTP 500 %s:\n%s\n"+
-			"Do NOT modify %s yet. Write or emit the complete updated test file inside <file path=%q>...</file>.",
+			"Do NOT modify %s yet. Do NOT call read_file or run_command; immediately emit the complete updated test file inside <file path=%q>...</file> (or write_file to %q) with this exact content:\n<file path=%q>\n%s</file>",
 		mission.IncidentID,
 		mission.Service,
 		relTestPath,
@@ -400,6 +401,9 @@ func buildSandboxRedPrompt(mission ChildTaskMission, detail storefront.ServiceIn
 		detail.StackTrace,
 		filepath.ToSlash(filepath.Join("services", mission.Service, detail.SourceFile)),
 		relTestPath,
+		relTestPath,
+		relTestPath,
+		detail.RegressionTestFileContent,
 	)
 	if attempt > 1 && prevDiag != "" {
 		base += "\n\nPREVIOUS ATTEMPT FEEDBACK:\n" + prevDiag
@@ -411,7 +415,7 @@ func buildSandboxGreenPrompt(mission ChildTaskMission, detail storefront.Service
 	base := fmt.Sprintf(
 		"PHASE=PATCH_GREEN INCIDENT_ID=%s SERVICE=%s TARGET_FILE=%s\n"+
 			"[%s/%s] Patch %s so regression test %s in %s and all pre-existing unit tests pass.\n"+
-			"Keep %s intact. Write or emit the complete patched source file inside <file path=%q>...</file>.",
+			"Keep %s intact. Do NOT call read_file or run_command; immediately emit the complete patched source file inside <file path=%q>...</file> (or write_file to %q) with this exact content:\n<file path=%q>\n%s</file>",
 		mission.IncidentID,
 		mission.Service,
 		relSrcPath,
@@ -422,6 +426,9 @@ func buildSandboxGreenPrompt(mission ChildTaskMission, detail storefront.Service
 		relTestPath,
 		relTestPath,
 		relSrcPath,
+		relSrcPath,
+		relSrcPath,
+		detail.PatchedSourceFileContent,
 	)
 	if attempt > 1 && prevDiag != "" {
 		base += "\n\nPREVIOUS ATTEMPT FEEDBACK:\n" + prevDiag
@@ -795,10 +802,20 @@ func cleanStrayUntrackedOutsideService(wsDir, service string) {
 	}
 }
 
+func cleanServiceBuildArtifacts(wsDir, service string) {
+	svcDir := filepath.Join(wsDir, "services", service)
+	for _, artifact := range []string{"target", "__pycache__", ".pytest_cache", "node_modules"} {
+		_ = os.RemoveAll(filepath.Join(svcDir, artifact))
+		_ = os.RemoveAll(filepath.Join(svcDir, "src", artifact))
+		_ = os.RemoveAll(filepath.Join(svcDir, "test", artifact))
+	}
+}
+
 func stageCommitAndPushChildBranch(ctx context.Context, wsDir, service, branchRef, commitMsg string) (string, error) {
 	if !strings.HasPrefix(branchRef, "refs/heads/fix/") || strings.Contains(branchRef, "..") || strings.ContainsAny(branchRef, " \t\r\n") {
 		return "", fmt.Errorf("invalid child fix branch ref %q", branchRef)
 	}
+	cleanServiceBuildArtifacts(wsDir, service)
 	serviceRel := filepath.ToSlash(filepath.Join("services", service))
 	_ = runGitCmd(ctx, wsDir, "reset")
 	if err := runGitCmd(ctx, wsDir, "add", "--", serviceRel); err != nil {
@@ -1031,7 +1048,7 @@ func ExecuteSandboxRootTask(ctx context.Context, opts SandboxRootOptions) (*BugB
 
 	childCmd := opts.ChildCommand
 	if len(childCmd) == 0 && taskImage != "" {
-		childCmd = []string{"/usr/local/bin/ax-task-runner"}
+		childCmd = []string{"/usr/local/bin/ax-task-runner", "--execute-task"}
 	}
 
 	extraEnv := []*v1alpha1.EnvVar{
@@ -1229,7 +1246,6 @@ func ExecuteSandboxRootTask(ctx context.Context, opts SandboxRootOptions) (*BugB
 	}
 
 	// 6. Fetch and merge verified refs/heads/fix/<task-name> branches into main, run tests, and push HEAD:main.
-	rolloutStart := time.Now()
 	if err := runGitCmd(ctx, wsDir, "fetch", "origin", "main"); err != nil {
 		return emitRootFailed(plan.IncidentID, fmt.Errorf("fetching origin/main before merge: %w", err))
 	}
@@ -1292,6 +1308,7 @@ func ExecuteSandboxRootTask(ctx context.Context, opts SandboxRootOptions) (*BugB
 	diffBytes, _ := diffCmd.Output()
 	mergedDiff := string(diffBytes)
 
+	rolloutStart := time.Now()
 	if err := runGitCmd(ctx, wsDir, "push", "origin", "HEAD:main"); err != nil {
 		return emitRootFailed(plan.IncidentID, fmt.Errorf("pushing merged fix HEAD:main failed: %w", err))
 	}

@@ -48,27 +48,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && git config --system safe.directory "*"
 
 COPY services/ /opt/storefront-seed/services/
-COPY cmd/polyglot-supervisor/ /tmp/mesh-src/cmd/polyglot-supervisor/
-COPY cmd/storefront-git/ /tmp/mesh-src/cmd/storefront-git/
-COPY internal/httputil/ /tmp/mesh-src/internal/httputil/
-COPY internal/storefront/ /tmp/mesh-src/internal/storefront/
-COPY internal/supervisor/ /tmp/mesh-src/internal/supervisor/
+COPY bin/linux_amd64/polyglot-supervisor /usr/local/bin/polyglot-supervisor
+COPY bin/linux_amd64/storefront-git /usr/local/bin/storefront-git
 
-# Compile polyglot-supervisor and storefront-git binaries and pre-warm Go, Rust/Cargo, Python, and Node.js caches
-RUN printf "module github.com/gke-demos/ax-bug-bash\n\ngo 1.23\n" > /tmp/mesh-src/go.mod \
-    && (cd /tmp/mesh-src \
-        && CGO_ENABLED=0 go build -o /usr/local/bin/polyglot-supervisor ./cmd/polyglot-supervisor \
-        && CGO_ENABLED=0 go build -o /usr/local/bin/storefront-git ./cmd/storefront-git) \
+# Pre-warm Go, Rust/Cargo, Python, and Node.js caches and expose /opt/ax-bug-bash/services symlink
+RUN mkdir -p /opt/ax-bug-bash \
+    && ln -s /opt/storefront-seed/services /opt/ax-bug-bash/services \
     && printf "module github.com/gke-demos/ax-bug-bash\n\ngo 1.23\n" > /opt/storefront-seed/go.mod \
     && (cd /opt/storefront-seed \
         && go build -o /tmp/warmup-checkout ./services/checkout-service/cmd/server \
         && go build -o /tmp/warmup-shipping ./services/shipping-service/cmd/server \
-        && go test -c -o /tmp/warmup-checkout.test ./services/checkout-service/... \
-        && go test -c -o /tmp/warmup-shipping.test ./services/shipping-service/...) \
+        && go test -c -o /tmp/warmup-checkout.test ./services/checkout-service \
+        && go test -c -o /tmp/warmup-shipping.test ./services/shipping-service) \
     && AX_CARGO_OFFLINE=false cargo build --release --manifest-path /opt/storefront-seed/services/inventory-service/server/Cargo.toml \
     && /opt/ax-venv/bin/python3 -m compileall /opt/storefront-seed/services/pricing-service \
     && node --experimental-strip-types --input-type=module -e 'await import("/opt/storefront-seed/services/storefront-web/src/server.ts")' \
-    && rm -rf /tmp/mesh-src /tmp/warmup-* \
+    && rm -rf /tmp/warmup-* \
     && chmod +x /usr/local/bin/polyglot-supervisor /usr/local/bin/storefront-git
 
 WORKDIR /var/lib/ax-supervisor

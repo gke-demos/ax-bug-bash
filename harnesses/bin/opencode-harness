@@ -41,7 +41,8 @@ SANDBOX_TOKEN = os.environ.get("OPENAI_API_KEY", "ax-sandbox-token")
 SYSTEM_PROMPT = (
     "You are OpenCode (opencode-ai), an autonomous coding agent running inside a google/ax + Agent Substrate v0.6.0 sandbox in /workspace. "
     "Follow strict Red-Green TDD: first write a failing Regression Test reproducing the production 500 error, "
-    "then patch the microservice until all tests pass."
+    "then patch the microservice until all tests pass. "
+    "Emit updated files inside `<file path=\"relative/path\">...content...</file>` blocks."
 )
 
 TOOLS = [
@@ -141,12 +142,14 @@ def run_opencode_turn(prompt: str) -> str:
     ]
     url = f"{OPENAI_BASE_URL}/chat/completions"
 
+    single_shot_file_phase = "PHASE=REPRODUCE_RED" in prompt or "PHASE=PATCH_GREEN" in prompt
     for _ in range(6):
         payload = {
             "model": MODEL,
             "messages": messages,
-            "tools": TOOLS,
         }
+        if not single_shot_file_phase:
+            payload["tools"] = TOOLS
         req = urllib.request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),

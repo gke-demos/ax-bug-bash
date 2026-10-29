@@ -1,15 +1,6 @@
 # AX Bug Bash Tree — Core System & Three Decoupled Surfaces (ADR-0001..ADR-0011)
 # All container images are pinned to immutable @sha256: digests resolved by hack/deploy-gke.sh
 ---
-apiVersion: v1
-kind: Secret
-metadata:
-  name: ax-postgres
-  namespace: ax-system
-type: Opaque
-stringData:
-  password: "ax-bug-bash-smoke-pw"
----
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -67,7 +58,7 @@ spec:
         name: data
         labels:
           app.kubernetes.io/name: ax-postgres
-          app.kubernetes.io/part-of: ax-bug-bash
+          app.kubernetes.io/part-of: ax
       spec:
         accessModes: ["ReadWriteOnce"]
         resources:
@@ -161,6 +152,8 @@ spec:
               value: "${IMAGE_REGISTRY}/ax-task-runner@sha256:${TASK_RUNNER_SHA256}"
             - name: AX_SNAPSHOTS_BUCKET
               value: "gs://${AX_SNAPSHOTS_BUCKET}/ax-bug-bash/"
+            - name: AX_AUTO_ACTOR_EGRESS
+              value: "true"
           ports:
             - containerPort: 8080
               name: http
@@ -562,12 +555,20 @@ spec:
         - name: ax-observer
           image: ${IMAGE_REGISTRY}/ax-observer@sha256:${AX_OBSERVER_SHA256}
           env:
+            - name: LISTEN_ADDR
+              value: "0.0.0.0:3000"
             - name: OBSERVER_ADDR
               value: "0.0.0.0:3000"
+            - name: ALL_IN_ONE
+              value: "false"
             - name: EXECUTION_MODE
+              value: "LIVE_GKE"
+            - name: AX_EXECUTION_MODE
               value: "LIVE_GKE"
             - name: STOREFRONT_URL
               value: "http://storefront.ax-bug-bash.svc.cluster.local:3001"
+            - name: STOREFRONT_GIT_URL
+              value: "http://storefront-git.ax-bug-bash.svc.cluster.local:8090/git/storefront.git"
             - name: STOREFRONT_PUBLIC_URL
               value: "http://127.0.0.1:3001"
             - name: GRAFANA_PUBLIC_URL
@@ -582,10 +583,12 @@ spec:
               value: "ax-server.ax-system.svc.cluster.local:8080"
             - name: MODEL_GATEWAY_URL
               value: "http://model-gateway.ax-system.svc.cluster.local:8080"
+            - name: AX_DEFAULT_TASK_IMAGE
+              value: "${IMAGE_REGISTRY}/ax-task-runner@sha256:${TASK_RUNNER_SHA256}"
             - name: TASK_RUNNER_IMAGE
               value: "${IMAGE_REGISTRY}/ax-task-runner@sha256:${TASK_RUNNER_SHA256}"
             - name: OBSERVER_CALLBACK_URL
-              value: "http://ax-observer.ax-bug-bash.svc.cluster.local:3000"
+              value: "http://ax-observer.ax-bug-bash.svc.cluster.local:3000/api/internal/observer-events"
             - name: SUBSTRATE_CONTROL_ADDR
               value: "api.ate-system.svc.cluster.local:443"
             - name: SUBSTRATE_TOKEN_FILE

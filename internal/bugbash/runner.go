@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -86,6 +87,8 @@ func RunCustomTaskRunner(ctx context.Context, opts CustomRunnerOptions) error {
 			if exe, err := os.Executable(); err == nil {
 				task.Spec.Command = []string{exe, "--execute-task"}
 			}
+		} else if len(task.Spec.Command) == 1 && filepath.Base(task.Spec.Command[0]) == "ax-task-runner" {
+			task.Spec.Command = []string{task.Spec.Command[0], "--execute-task"}
 		}
 		if axServerAddr != "" {
 			task.Spec.Env = ensureEnvVar(task.Spec.Env, "AX_SERVER_ADDR", axServerAddr)
@@ -498,12 +501,20 @@ func parseYAMLLenientBytes(raw []byte, out proto.Message) error {
 }
 
 func postObserverCallback(callbackURL string, res ChildTaskResult) {
+	trimmedURL := strings.TrimSpace(callbackURL)
+	if trimmedURL == "" {
+		return
+	}
+	if u, err := url.Parse(trimmedURL); err == nil && (u.Path == "" || u.Path == "/") {
+		u.Path = "/api/observer/callback"
+		trimmedURL = u.String()
+	}
 	body, err := json.Marshal(res)
 	if err != nil {
 		return
 	}
 	client := &http.Client{Timeout: 5 * time.Second}
-	req, err := http.NewRequest(http.MethodPost, callbackURL, bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, trimmedURL, bytes.NewReader(body))
 	if err != nil {
 		return
 	}

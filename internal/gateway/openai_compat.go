@@ -30,9 +30,10 @@ type OpenAIMessage struct {
 
 // OpenAIToolCall represents an assistant tool invocation in OpenAI wire format.
 type OpenAIToolCall struct {
-	ID       string             `json:"id"`
-	Type     string             `json:"type"`
-	Function OpenAIFunctionCall `json:"function"`
+	ID               string             `json:"id"`
+	Type             string             `json:"type"`
+	Function         OpenAIFunctionCall `json:"function"`
+	ThoughtSignature string             `json:"thought_signature,omitempty"`
 }
 
 // OpenAIFunctionCall holds the function name and JSON-encoded arguments string.
@@ -62,6 +63,7 @@ func (s *Server) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Requ
 	}
 
 	requestedModel := strings.TrimSpace(oaiReq.Model)
+	requestedModel = strings.TrimPrefix(requestedModel, "agent-platform-gateway/")
 	if requestedModel == "" && len(s.cfg.FallbackCascade) > 0 {
 		requestedModel = s.cfg.FallbackCascade[0]
 	}
@@ -167,12 +169,16 @@ func OpenAIToGeminiRequest(req OpenAIChatCompletionRequest) ([]byte, error) {
 				if argsMap == nil {
 					argsMap = map[string]any{}
 				}
-				parts = append(parts, map[string]any{
+				part := map[string]any{
 					"functionCall": map[string]any{
 						"name": tc.Function.Name,
 						"args": argsMap,
 					},
-				})
+				}
+				if tc.ThoughtSignature != "" {
+					part["thoughtSignature"] = tc.ThoughtSignature
+				}
+				parts = append(parts, part)
 			}
 			if len(parts) > 0 {
 				contents = append(contents, map[string]any{
@@ -269,8 +275,9 @@ func GeminiToOpenAIResponse(taskName string, result CascadeResult, isStream bool
 		Candidates []struct {
 			Content struct {
 				Parts []struct {
-					Text         string `json:"text,omitempty"`
-					FunctionCall *struct {
+					Text             string `json:"text,omitempty"`
+					ThoughtSignature string `json:"thoughtSignature,omitempty"`
+					FunctionCall     *struct {
 						Name string         `json:"name"`
 						Args map[string]any `json:"args"`
 					} `json:"functionCall,omitempty"`
@@ -300,6 +307,7 @@ func GeminiToOpenAIResponse(taskName string, result CascadeResult, isStream bool
 						Name:      p.FunctionCall.Name,
 						Arguments: string(argsJSON),
 					},
+					ThoughtSignature: p.ThoughtSignature,
 				})
 			}
 		}

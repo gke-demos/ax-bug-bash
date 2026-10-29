@@ -11,7 +11,7 @@ build:
 	@mkdir -p bin
 	go build -o bin/ax-observer ./cmd/ax-observer
 	go build -o bin/model-gateway ./cmd/model-gateway
-	go build -o bin/ax-task-runner ./cmd/ax-task-runner
+	go build -o bin/ax-task-runner ./cmd/ax-bug-bash-runner
 	go build -o bin/polyglot-supervisor ./cmd/polyglot-supervisor
 	go build -o bin/storefront-git ./cmd/storefront-git
 
@@ -32,7 +32,7 @@ images: build
 	@mkdir -p bin/linux_amd64
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/linux_amd64/ax-observer ./cmd/ax-observer
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/linux_amd64/model-gateway ./cmd/model-gateway
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/linux_amd64/ax-task-runner ./cmd/ax-task-runner
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/linux_amd64/ax-task-runner ./cmd/ax-bug-bash-runner
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/linux_amd64/polyglot-supervisor ./cmd/polyglot-supervisor
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/linux_amd64/storefront-git ./cmd/storefront-git
 	docker build -f deploy/model-gateway/Dockerfile -t $(REGISTRY)/model-gateway:$(TAG) .

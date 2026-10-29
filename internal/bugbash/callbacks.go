@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -95,6 +96,10 @@ func PostObserverEvent(ctx context.Context, callbackURL string, ev ObserverCallb
 	trimmedURL := strings.TrimSpace(callbackURL)
 	if trimmedURL == "" {
 		return nil
+	}
+	if u, err := url.Parse(trimmedURL); err == nil && (u.Path == "" || u.Path == "/") {
+		u.Path = "/api/internal/observer-events"
+		trimmedURL = u.String()
 	}
 	if ev.Timestamp.IsZero() {
 		ev.Timestamp = time.Now().UTC()

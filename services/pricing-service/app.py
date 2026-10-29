@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Standalone HTTP server for pricing-service (FastAPI + Uvicorn with stdlib fallback)."""
 
-from __future__ import annotations
-
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -13,6 +11,15 @@ import time
 import traceback
 from typing import Any, Dict, List, Optional, Tuple
 import urllib.request
+
+try:
+    from fastapi import FastAPI, Request
+    from fastapi.responses import JSONResponse
+    import uvicorn
+
+    _HAS_FASTAPI = True
+except ImportError:
+    _HAS_FASTAPI = False
 
 from pricing import apply_stacked_promos, convert_currency_minor_units
 
@@ -128,11 +135,7 @@ def _parse_listen_addr() -> Tuple[str, int]:
 
 
 def _run_fastapi(host: str, port: int, loki_url: str) -> bool:
-    try:
-        from fastapi import FastAPI, Request
-        from fastapi.responses import JSONResponse
-        import uvicorn
-    except ImportError:
+    if not _HAS_FASTAPI:
         return False
 
     app = FastAPI(title="Storefront Pricing Service", docs_url=None, redoc_url=None)
