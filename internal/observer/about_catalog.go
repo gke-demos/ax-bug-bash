@@ -189,6 +189,7 @@ var expectedADRFileList = []string{
 	"0010-interactive-about-architecture-catalog-and-drift-verification.md",
 	"0011-two-tier-evaluation-chaos-soak-and-gcp-dual-export-verification.md",
 	"0012-bom20-blog-tutorial-and-stage-walkthrough-contract.md",
+	"0013-upstream-google-ax-v060-compatibility-overlay.md",
 }
 
 // ExpectedADRFilenames returns the canonical ADR filenames in docs/adr/.
@@ -1201,6 +1202,22 @@ func BuildArchitectureTopologyCatalog(rt CatalogRuntimeTelemetry) ArchitectureTo
 			},
 			RelatedNodes:    []string{"ax-observer", "ax-server-openfga", "model-gateway", "ateworker-gvisor-pool"},
 			RuntimeCounters: commonCounters(map[string]string{"launch_deliverables": "Blog + 5-Lab Tutorial + Stage Walkthrough"}),
+		},
+		{
+			ID:       "ADR-0013",
+			Number:   13,
+			Filename: expectedADRFileList[12],
+			Title:    "Upstream google/ax Compatibility Overlay and Three-Patch PR Blueprints (Issues #482, #511, #518)",
+			Status:   "Accepted",
+			Category: "Agent Substrate",
+			Summary:  "Maintains a reproducible compatibility overlay (deploy/ax-server/ax-server-v061.patch) and contributor guide (docs/upstream/google-ax-v060-patches.md) mapping our 3 live-GKE fixes to upstream google/ax Issues #482, #511, and #518.",
+			KeyDecisions: []string{
+				"Issue #482: /healthz:80 WakeupProbe, GOLDEN_SNAPSHOT_MODE_DISABLED, and per-actor EgressPolicy before ResumeActor",
+				"Issue #511: substrate.ateapi.v1.Control proto path, OpenFGA default store bootstrap, and context.WithoutCancel(ctx) on SuspendTask",
+				"Issue #518: persistent /workspace/.ax maiden-run marker and isolated /workspace/.ax-state/<task>.json checkpoint metadata",
+			},
+			RelatedNodes:    []string{"ax-server-openfga", "ateworker-gvisor-pool", "ax-observer"},
+			RuntimeCounters: commonCounters(map[string]string{"overlay_patches": "3 (#482, #511, #518)", "substrate_api": "substrate.ateapi.v1.Control"}),
 		},
 	}
 
