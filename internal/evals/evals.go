@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -228,8 +229,86 @@ type HygieneReport struct {
 	Passed       bool     `json:"passed"`
 }
 
-// VerifyRepositoryHygieneAndManifests validates that all deployment manifests, scripts, Makefile, and README.md
-// satisfy the ADR-0006 / ADR-0007 contracts and contain zero forbidden strings.
+var (
+	inlineCodeSpanRe      = regexp.MustCompile("`[^`]*`")
+	mdLinkTargetRe        = regexp.MustCompile(`\]\([^)]*\)`)
+	contrastTellRe        = regexp.MustCompile(`(?i)(?:\bnot\s+(?:just|only|merely)\s+[^.!?\n]{1,120}?,\s*(?:but|it's|it\s+is)\b|\bnot\s+(?:a|an|the|about|by|for|in|on|to|with|[a-z0-9_-]+)\s+[^.!?\n]{0,80}?,\s*but\b|\bit(?:'s|\s+is)\s+not\s+[^.!?\n]{1,80}?,\s*it(?:'s|\s+is)\b)`)
+	stagedOpenerRe        = regexp.MustCompile(`(?i)(?:\b(?:let's|let\s+us)\s+(?:dive\s+in|explore|break\s+this\s+down|be\s+honest)\b|\bhere's\s+the\s+thing\b|\bhere's\s+what\s+you\s+need\s+to\s+know\b|\bwithout\s+further\s+ado\b|\bin\s+this\s+(?:blog\s+)?post,?\s+we\s+will\b)`)
+	aiFillerWordRe        = regexp.MustCompile(`(?i)\b(?:delve|delves|delving|tapestry|testament|pivotal|seamlessly|unlock|unlocks|unlocking|paradigm|crucial|meticulous|meticulously|groundbreaking|breathtaking)\b`)
+	markdownStageUnsafeRe = regexp.MustCompile(`(?i)(?:gs://[a-z0-9._/-]+|\bgke_[a-z0-9-]+_[a-z0-9-]+_[a-z0-9-]+\b|\bgke-[a-z0-9-]+-(?:pool|node|default)[a-z0-9_-]*|\b\d{12}\b|\bprojects/[a-z][a-z0-9-]{4,29}\b)`)
+)
+
+func forbiddenHygieneTokens() []string {
+	return []string{
+		"Vertex" + " AI",
+		"fluid" + " compute",
+		"ate" + "-cluster",
+		"mofi" + "labs",
+		"598464" + "211339",
+		"gke_mofi" + "labs_us-central1-a_ate-cluster",
+		"gke-ate" + "-cluster",
+		"substrate" + "-poc",
+	}
+}
+
+// VerifyMarkdownHumanizerAndHygiene enforces the ADR-0012 humanizer/unslop prose rules and stage-safe
+// hygiene contract on markdown documentation files. Code blocks and inline code spans are excluded from
+// prose punctuation/phrasing checks while stage-safe token checks run across the entire document.
+func VerifyMarkdownHumanizerAndHygiene(relPath, content string) []string {
+	var violations []string
+
+	lowerFull := strings.ToLower(content)
+	for _, bad := range forbiddenHygieneTokens() {
+		if strings.Contains(lowerFull, strings.ToLower(bad)) {
+			violations = append(violations, fmt.Sprintf("%s contains forbidden token %q", relPath, bad))
+		}
+	}
+	if match := markdownStageUnsafeRe.FindString(content); match != "" {
+		violations = append(violations, fmt.Sprintf("%s contains forbidden stage-unsafe cluster/project/node/bucket identifier %q", relPath, match))
+	}
+
+	lines := strings.Split(content, "\n")
+	inFence := false
+	for idx, rawLine := range lines {
+		lineNum := idx + 1
+		trimmed := strings.TrimSpace(rawLine)
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			inFence = !inFence
+			continue
+		}
+		if inFence {
+			continue
+		}
+
+		// Strip inline code spans and markdown link URLs before checking prose rules.
+		proseLine := inlineCodeSpanRe.ReplaceAllString(rawLine, " ")
+		proseLine = mdLinkTargetRe.ReplaceAllString(proseLine, "]()")
+
+		if strings.ContainsRune(proseLine, '\u2014') {
+			violations = append(violations, fmt.Sprintf("%s:%d contains forbidden em dash in prose", relPath, lineNum))
+		}
+		if strings.ContainsRune(proseLine, '\u2013') {
+			violations = append(violations, fmt.Sprintf("%s:%d contains forbidden en dash in prose", relPath, lineNum))
+		}
+		if strings.Contains(proseLine, " -- ") {
+			violations = append(violations, fmt.Sprintf("%s:%d contains forbidden spaced double-hyphen dash in prose", relPath, lineNum))
+		}
+		if match := contrastTellRe.FindString(proseLine); match != "" {
+			violations = append(violations, fmt.Sprintf("%s:%d contains forbidden rhetorical contrast %q", relPath, lineNum, match))
+		}
+		if match := stagedOpenerRe.FindString(proseLine); match != "" {
+			violations = append(violations, fmt.Sprintf("%s:%d contains forbidden staged opener %q", relPath, lineNum, match))
+		}
+		if match := aiFillerWordRe.FindString(proseLine); match != "" {
+			violations = append(violations, fmt.Sprintf("%s:%d contains forbidden AI filler word %q", relPath, lineNum, match))
+		}
+	}
+
+	return violations
+}
+
+// VerifyRepositoryHygieneAndManifests validates that all deployment manifests, scripts, Makefile, README.md,
+// and Phase 3 blog/tutorial markdown files satisfy the ADR-0006, ADR-0007, and ADR-0012 contracts.
 func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error) {
 	if strings.TrimSpace(repoRoot) == "" {
 		repoRoot = "."
@@ -245,19 +324,15 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 		"hack/run-local.sh",
 		"Makefile",
 		"README.md",
+		"docs/blog/self-spawning-bug-bash-tree-on-google-ax.md",
 	}
 
-	// Construct forbidden strings dynamically so no literal forbidden token appears in source
-	forbiddenTokens := []string{
-		"Vertex" + " AI",
-		"fluid" + " compute",
-		"ate" + "-cluster",
-		"mofi" + "labs",
-		"598464" + "211339",
-		"gke_mofi" + "labs_us-central1-a_ate-cluster",
-		"gke-ate" + "-cluster",
-		"substrate" + "-poc",
+	optionalTutorialRel := "docs/tutorial/build-a-self-spawning-bug-bash-tree.md"
+	if _, err := os.Stat(filepath.Join(repoRoot, optionalTutorialRel)); err == nil {
+		filesToScan = append(filesToScan, optionalTutorialRel)
 	}
+
+	forbiddenTokens := forbiddenHygieneTokens()
 
 	contentsByFile := make(map[string]string, len(filesToScan))
 	var report HygieneReport
@@ -278,6 +353,9 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 			if strings.Contains(lowerText, strings.ToLower(bad)) {
 				report.Violations = append(report.Violations, fmt.Sprintf("%s contains forbidden string %q", rel, bad))
 			}
+		}
+		if strings.HasPrefix(rel, "docs/blog/") || strings.HasPrefix(rel, "docs/tutorial/") {
+			report.Violations = append(report.Violations, VerifyMarkdownHumanizerAndHygiene(rel, text)...)
 		}
 	}
 
@@ -393,6 +471,25 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 		"gemini-3.5-flash",
 		"Gemini Enterprise Agent Platform",
 		"Agent Substrate",
+	})
+
+	requireSnippets("docs/blog/self-spawning-bug-bash-tree-on-google-ax.md", []string{
+		"Why CI Passed and Production Still Returned HTTP 500",
+		"From Single-Container Chat Loops to a Self-Spawning Bug Bash Tree",
+		"The Three-Layer Substrate Stack on GKE",
+		"Multi-Harness Red-Green TDD and the Zero-Secret Model Gateway",
+		"Root Verification Gate and Sub-3-Second Selective Git Hot-Reload",
+		"Live GKE Benchmarks and Two-Tier Evaluation",
+		"Try It Yourself",
+		"Three-Layer Substrate Stack",
+		"SNAPSHOT_FIDELITY_VOLUMES",
+		"gemini-3.8-flash",
+		"Gemini Enterprise Agent Platform",
+		"compute obtainability",
+		"80ms",
+		"42.6ms",
+		"61ms",
+		"docs/assets/ax-live-gke-terminal.gif",
 	})
 
 	report.Passed = len(report.Violations) == 0 && len(report.CheckedFiles) == len(filesToScan)
