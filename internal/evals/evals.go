@@ -332,6 +332,9 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 		"README.md",
 		"docs/blog/self-spawning-bug-bash-tree-on-google-ax.md",
 		"docs/tutorial/build-a-self-spawning-bug-bash-tree.md",
+		"docs/upstream/google-ax-v060-patches.md",
+		"docs/showcase/slides.html",
+		"docs/showcase/architecture-report.md",
 	}
 
 	forbiddenTokens := forbiddenHygieneTokens()
@@ -350,7 +353,7 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 		text := string(raw)
 		contentsByFile[rel] = text
 
-		if strings.HasPrefix(rel, "docs/blog/") || strings.HasPrefix(rel, "docs/tutorial/") {
+		if strings.HasPrefix(rel, "docs/blog/") || strings.HasPrefix(rel, "docs/tutorial/") || strings.HasPrefix(rel, "docs/upstream/") || rel == "docs/showcase/architecture-report.md" {
 			report.Violations = append(report.Violations, VerifyMarkdownHumanizerAndHygiene(rel, text)...)
 			continue
 		}
@@ -499,7 +502,38 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 		"Agent Substrate",
 		"docs/blog/self-spawning-bug-bash-tree-on-google-ax.md",
 		"docs/tutorial/build-a-self-spawning-bug-bash-tree.md",
+		"docs/upstream/google-ax-v060-patches.md",
+		"docs/showcase/slides.html",
+		"docs/showcase/architecture-report.md",
 		"docs/assets/ax-live-gke-terminal.gif",
+	})
+
+	requireSnippets("docs/upstream/google-ax-v060-patches.md", []string{
+		"Issue #482",
+		"Issue #511",
+		"Issue #518",
+		"/healthz",
+		"GOLDEN_SNAPSHOT_MODE_DISABLED",
+		"context.WithoutCancel",
+		"/workspace/.ax",
+	})
+
+	requireSnippets("docs/showcase/slides.html", []string{
+		`class="slide`,
+		"The Self-Spawning Bug Bash Tree",
+		"BOM-19",
+		"BOM-20",
+		"ADR-0013",
+	})
+
+	requireSnippets("docs/showcase/architecture-report.md", []string{
+		"The Self-Spawning Bug Bash Tree",
+		"Three-Layer Substrate Stack",
+		"Gemini Enterprise Agent Platform",
+		"compute obtainability",
+		"Issue #482",
+		"Issue #511",
+		"Issue #518",
 	})
 
 	requireSnippets("docs/blog/self-spawning-bug-bash-tree-on-google-ax.md", []string{

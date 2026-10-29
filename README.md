@@ -92,20 +92,22 @@ gemini-3.8-flash  →  gemini-3.7-flash  →  gemini-3.6-flash  →  gemini-3.5-
 
 ---
 
-## Agent Substrate `v0.6.0` & `google/ax` Hardening (`ADR-0006`)
+## Agent Substrate `v0.6.0` & `google/ax` Hardening (`ADR-0006` & `ADR-0013`)
 
-`manifests/ax-v060-overlay.yaml` and `internal/bugbash/runner.go` bake in three production mitigations for `google/ax` on **Agent Substrate `v0.6.0`**:
+`manifests/ax-v060-overlay.yaml`, `deploy/ax-server/ax-server-v061.patch`, and `internal/bugbash/runner.go` bake in three production mitigations for `google/ax` on **Agent Substrate `v0.6.0+`** (documented in [`docs/upstream/google-ax-v060-patches.md`](docs/upstream/google-ax-v060-patches.md)):
 
-1. **OpenFGA `AccessPolicy` (`google/ax` Issue #511)**: Grants `user:system:serviceaccount:ax-system:ax-server` `admin` permissions on `Namespace/default` and `Namespace/ax-bug-bash` so `ax-server` can create, resume, and suspend tasks without `actor_PermissionDenied`.
-2. **Volume-Snapshot State Persistence (`google/ax` Issue #518)**: Stores all Custom Runner state and TDD artifacts under `/workspace/.ax-state/<task-name>.json` so `SNAPSHOT_FIDELITY_VOLUMES` preserves task state across `SuspendTask` / `ResumeTask` cycles.
-3. **Sub-Second In-Cluster Git Clone Before `/readyz` (`google/ax` Issue #482)**: Clones the monorepo from the in-cluster Git service (`http://storefront.ax-bug-bash.svc.cluster.local:3001/git/storefront.git`) in `< 500ms` so the sandbox passes `WakeupProbe` on `/readyz` immediately.
+1. **OpenFGA `AccessPolicy` & Self-Suspend Detach (`google/ax` Issue #511)**: Grants `user:system:serviceaccount:ax-system:ax-server` `owner` permissions on `Namespace/default` and `Namespace/ax-bug-bash`, updates proto imports to `go.ate.dev/substrate/api/ateapi/v1`, and detaches `Server.SuspendTask` via `context.WithoutCancel(ctx)`.
+2. **Volume-Snapshot State Persistence (`google/ax` Issue #518)**: Persists the workspace maiden-run marker at `/workspace/.ax` and stores per-task Custom Runner state under `/workspace/.ax-state/<task-name>.json` so `SNAPSHOT_FIDELITY_VOLUMES` preserves state across `SuspendTask` / `ResumeTask` cycles.
+3. **Sub-Second In-Cluster Git Clone & `/healthz` Probe (`google/ax` Issue #482)**: Probes `/healthz:80`, sets `GOLDEN_SNAPSHOT_MODE_DISABLED`, and attaches per-actor `EgressPolicy` before `ResumeActor` so sandboxes clone `http://storefront.ax-bug-bash.svc.cluster.local:3001/git/storefront.git` in `80ms`.
 
 ---
 
-## Documentation, Blog Post & Live GKE Stage Walkthrough (`ADR-0012`)
+## Documentation, Blog Post & Live GKE Stage Walkthrough (`ADR-0012` & `ADR-0013`)
 
 - **Flagship Technical Blog Post (`BOM-20`)**: [`docs/blog/self-spawning-bug-bash-tree-on-google-ax.md`](docs/blog/self-spawning-bug-bash-tree-on-google-ax.md) walks through the 7-section narrative, the **Three-Layer Substrate Stack**, multi-harness Red-Green TDD against the zero-secret **Model Gateway**, `< 3s` selective Git hot-reload, and measured GKE latency benchmarks (`80ms` clone, `4ms` `go test`, `42.6ms` `SNAPSHOT_FIDELITY_VOLUMES` checkpoint, `61ms` slot reclamation).
 - **Five-Lab Hands-On Developer Tutorial**: [`docs/tutorial/build-a-self-spawning-bug-bash-tree.md`](docs/tutorial/build-a-self-spawning-bug-bash-tree.md) provides a step-by-step developer walkthrough from local `SIMULATED` mode (`make run-local` and `make eval`) through authoring a Go **Custom Runner** (`runner.Run`, `OnCommandExit`, `SuspendTask`), configuring the zero-secret **Model Gateway**, deploying to GKE (`make deploy`), and verifying the live `4x4` chaos soak (`make eval-live-gke`).
+- **Upstream `google/ax` Compatibility Overlay Guide**: [`docs/upstream/google-ax-v060-patches.md`](docs/upstream/google-ax-v060-patches.md) provides three standalone upstream PR blueprints (`Issues #482, #511, #518`) with root causes, minimal unified diffs, and live-GKE verification metrics.
+- **Interactive Architecture Deck & Report**: [`docs/showcase/slides.html`](docs/showcase/slides.html) and [`docs/showcase/architecture-report.md`](docs/showcase/architecture-report.md) provide the 16:9 presentation deck and benchmark readout.
 
 ![Live GKE Terminal Demo](docs/assets/ax-live-gke-terminal.gif)
 

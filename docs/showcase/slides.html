@@ -1,0 +1,249 @@
+<style>
+  .badge-svg {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .badge-svg svg {
+    width: 16px;
+    height: 16px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .code-pill {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.85em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--accent);
+  }
+  .table-compact {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.88rem;
+  }
+  .table-compact th,
+  .table-compact td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+  }
+  .table-compact th {
+    color: var(--text-secondary);
+    font-weight: 600;
+  }
+</style>
+
+<section class="slide layout-title" data-title="The Self-Spawning Bug Bash Tree" data-notes="Welcome. Today we walk through The Self-Spawning Bug Bash Tree (ax-bug-bash), our BOM-19 and BOM-20 flagship reference architecture on google/ax and Agent Substrate v0.6.0 on GKE.">
+  <span class="slide-badge badge-svg">
+    <svg viewBox="0 0 24 24"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M6 9v12"/></svg>
+    Agent Substrate v0.6.0 &amp; google/ax Reference Stack (BOM-19 / BOM-20)
+  </span>
+  <h1>The Self-Spawning Bug Bash Tree</h1>
+  <p class="subtitle">Recursive Sub-Task Fan-Out, Multi-Harness Red-Green TDD &amp; Sub-3s Polyglot Hot-Reload on GKE</p>
+</section>
+
+<section class="slide" data-title="Why Single-Service CI Passed &amp; Production Returned 500" data-notes="Every single-service unit test passes on the happy path, yet a cross-service cart payload triggers HTTP 500 within 15 seconds.">
+  <div class="slide-header">
+    <h2>1. Why Single-Service CI Passed &amp; Production Returned HTTP 500</h2>
+  </div>
+  <div class="grid-2col">
+    <div class="card">
+      <h3>Four Realistic Cross-Service Incidents</h3>
+      <ul class="slide-list">
+        <li><strong>INC-101 (Stacked Promo Negative Subtotal)</strong>: <span class="code-pill">SAVE20</span> + <span class="code-pill">FLAT15</span> on a <span class="code-pill">$16.00</span> cart drives subtotal to <span class="code-pill">-220</span> cents across Python and Go.</li>
+        <li><strong>INC-102 (Flash-Sale Bundle u32 Underflow)</strong>: Rust <span class="code-pill">u32</span> subtraction panics when <span class="code-pill">bonus_bundle_units</span> exceeds remaining stock.</li>
+        <li><strong>INC-103 (Zero-Decimal JPY Rounding)</strong>: Fractional minor units (<span class="code-pill">4476.15</span>) rejected across TypeScript, Python, and Go.</li>
+        <li><strong>INC-104 (Lithium Hazmat Weight Tier)</strong>: <span class="code-pill">UN3480-LITHIUM</span> ground parcel at <span class="code-pill">3,400g</span> hits unhandled carrier boundary.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="mermaid">
+        flowchart TB
+          Cart["Shopper Checkout Cart (:3001)"] --> SW["storefront-web (TypeScript)"]
+          SW --> CS["checkout-service (Go)"]
+          CS --> PS["pricing-service (Python)"]
+          CS --> IS["inventory-service (Rust)"]
+          CS --> SS["shipping-service (Go)"]
+          PS &amp; IS &amp; SS --> Prom["Prometheus 5s Scrape + Loki LogQL"]
+          Prom --> Alert["StorefrontHTTP500Spike -> AX Observer (:3000)"]
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="slide" data-title="Three Decoupled Production Surfaces" data-notes="Instead of hiding the target application inside a chat UI, we split the system into three decoupled browser-accessible surfaces.">
+  <div class="slide-header">
+    <h2>2. Three Decoupled Production Surfaces (ADR-0001)</h2>
+  </div>
+  <div class="grid-3col">
+    <div class="card">
+      <div class="kpi-number">:3001</div>
+      <div class="kpi-label">Surface 1 • Retail Storefront</div>
+      <p>5 polyglot microservices (Node.js/TS, Go, Python/FastAPI, Rust/Axum) + Git Smart-HTTP server (<span class="code-pill">/git/storefront.git</span>).</p>
+    </div>
+    <div class="card">
+      <div class="kpi-number">:3002</div>
+      <div class="kpi-label">Surface 2 • Observability Stack</div>
+      <p>In-cluster Prometheus (5s scrape), Alertmanager v4, Loki LogQL, Grafana (<span class="code-pill">ax-bug-bash-storefront</span>) + Google Cloud Dual-Export.</p>
+    </div>
+    <div class="card">
+      <div class="kpi-number">:3000</div>
+      <div class="kpi-label">Surface 3 • AX Observer</div>
+      <p>Path-based routing (<span class="code-pill">/</span>, <span class="code-pill">/workers</span>, <span class="code-pill">/about</span>), Projector Light Mode toggle, and <span class="code-pill">Cmd+K</span> Scenario Launcher.</p>
+    </div>
+  </div>
+</section>
+
+<section class="slide" data-title="The Three-Layer Substrate Stack (BOM-19)" data-notes="BOM-19 explains how Layer 1 (Agent Substrate), Layer 2 (agent-substrate/env), and Layer 3 (google/ax) compose on GKE.">
+  <div class="slide-header">
+    <h2>3. The Three-Layer Substrate Stack on GKE (BOM-19)</h2>
+  </div>
+  <div class="grid-3col">
+    <div class="card">
+      <h3>Layer 3 • google/ax</h3>
+      <ul class="slide-list">
+        <li>Declarative <span class="code-pill">Task</span>, <span class="code-pill">Workspace</span>, and <span class="code-pill">Model</span> resources</li>
+        <li>Typed mission payloads via <span class="code-pill">Task.spec.config</span> (<span class="code-pill">google.protobuf.Struct</span>)</li>
+        <li>In-sandbox Go Custom Runner (<span class="code-pill">runner.Run</span> + <span class="code-pill">OnCommandExit</span>)</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Layer 2 • agent-substrate/env</h3>
+      <ul class="slide-list">
+        <li>Guest readiness probe on <span class="code-pill">GET /healthz:80</span></li>
+        <li>Persistent maiden-run marker at <span class="code-pill">/workspace/.ax</span></li>
+        <li>Per-task checkpoint state at <span class="code-pill">/workspace/.ax-state/&lt;task&gt;.json</span></li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Layer 1 • Agent Substrate v0.6.0</h3>
+      <ul class="slide-list">
+        <li>Pre-warmed <span class="code-pill">ateworker-gvisor</span> pool (<span class="code-pill">4/4 Ready</span>)</li>
+        <li>Per-actor zero-trust <span class="code-pill">EgressPolicy</span> (<span class="code-pill">substrate.ateapi.v1.Control</span>)</li>
+        <li><span class="code-pill">SNAPSHOT_FIDELITY_VOLUMES</span> Cloud Storage checkpoints</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="slide" data-title="Recursive Task-Tree &amp; Red-Green TDD (BOM-20)" data-notes="The Root Task correlates Alertmanager and Loki stack traces to spawn Child Tasks only for implicated microservices.">
+  <div class="slide-header">
+    <h2>4. Recursive Task-Tree Fan-Out &amp; Red-Green TDD (BOM-20)</h2>
+  </div>
+  <div class="grid-2col">
+    <div class="card">
+      <h3>Selective Blast-Radius Orchestration</h3>
+      <ul class="slide-list">
+        <li><strong>Root Task (<span class="code-pill">triage-&lt;id&gt;</span>)</strong>: Queries Loki LogQL stack traces and fans out Child Tasks only for the 2 to 3 implicated services.</li>
+        <li><strong>Child Task (<span class="code-pill">fixer-&lt;id&gt;-&lt;svc&gt;</span>)</strong>: Writes a failing regression test first (Red), synthesizes the minimal patch (Green), and pushes <span class="code-pill">refs/heads/fix/&lt;task&gt;</span>.</li>
+        <li><strong>Self-Suspend Reclamation</strong>: Calls <span class="code-pill">SuspendTask</span> inside <span class="code-pill">OnCommandExit</span> to free the gVisor slot in <span class="code-pill">61ms</span>.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="mermaid">
+        sequenceDiagram
+          autonumber
+          participant AM as Alertmanager v4
+          participant Obs as AX Observer (:3000)
+          participant Root as Root Task (gVisor Slot 1)
+          participant Child as Child Tasks (gVisor Slots 2..3)
+          participant Git as storefront-git (:8090)
+          AM->>Obs: POST /api/webhooks/alertmanager
+          Obs->>Root: CreateTask + ResumeTask (triage-inc-101)
+          Root->>Child: CreateTask (pricing-service, shipping-service)
+          Child->>Child: Red Test -> Model Gateway Fix -> Green Suite
+          Child->>Git: git push refs/heads/fix/<task>
+          Child->>Obs: OnCommandExit -> SuspendTask (61ms slot freed)
+          Root->>Git: Verify &amp; merge --no-ff -> Selective Hot-Reload
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="slide" data-title="Zero-Secret Model Gateway &amp; Compute Obtainability" data-notes="Sandboxes hold zero long-lived cloud credentials and route through a 4-tier Gemini Flash cascade on Gemini Enterprise Agent Platform.">
+  <div class="slide-header">
+    <h2>5. Zero-Secret Model Gateway &amp; Compute Obtainability (ADR-0007)</h2>
+  </div>
+  <div class="grid-2col">
+    <div class="card">
+      <h3>Three Pre-Baked CLI Harnesses</h3>
+      <ul class="slide-list">
+        <li><strong>Antigravity (<span class="code-pill">antigravity</span>)</strong>: Native Gemini <span class="code-pill">v1beta</span> structured tool-use harness.</li>
+        <li><strong>OpenCode (<span class="code-pill">opencode</span>)</strong>: OpenAI-compatible autonomous diff synthesis harness.</li>
+        <li><strong>Pi (<span class="code-pill">pi</span>)</strong>: Surgical minimal-diff boundary repair harness.</li>
+        <li><strong>Zero Sandbox Secrets</strong>: Sandboxes authenticate to <span class="code-pill">model-gateway:8080</span> with an ephemeral per-task <span class="code-pill">TaskSessionToken</span>.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>4-Tier Gemini Flash Cascade on Agent Platform</h3>
+      <table class="table-compact">
+        <thead>
+          <tr><th>Tier</th><th>Model ID</th><th>Failover Trigger</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>Tier 1</strong></td><td><span class="code-pill">gemini-3.8-flash</span></td><td>Primary Frontier Flash Tier (0ms backoff)</td></tr>
+          <tr><td><strong>Tier 2</strong></td><td><span class="code-pill">gemini-3.7-flash</span></td><td>HTTP 429 / 503 on Tier 1</td></tr>
+          <tr><td><strong>Tier 3</strong></td><td><span class="code-pill">gemini-3.6-flash</span></td><td>Regional capacity overflow on Tier 2</td></tr>
+          <tr><td><strong>Tier 4</strong></td><td><span class="code-pill">gemini-3.5-flash</span></td><td>Guaranteed completion floor (+ FIXTURE CI)</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="slide" data-title="Upstream google/ax Compatibility Overlay (ADR-0013)" data-notes="Our compatibility overlay in deploy/ax-server/ax-server-v061.patch resolves three upstream google/ax issues on live GKE.">
+  <div class="slide-header">
+    <h2>6. Upstream google/ax Compatibility Overlay (ADR-0013)</h2>
+  </div>
+  <div class="grid-3col">
+    <div class="card">
+      <h3>Issue #482 • Wakeup &amp; Egress</h3>
+      <p>Switches <span class="code-pill">WakeupProbe</span> from <span class="code-pill">/readyz</span> to <span class="code-pill">/healthz:80</span>, sets <span class="code-pill">GOLDEN_SNAPSHOT_MODE_DISABLED</span>, and attaches per-actor <span class="code-pill">EgressPolicy</span> before <span class="code-pill">ResumeActor</span>.</p>
+    </div>
+    <div class="card">
+      <h3>Issue #511 • Self-Suspend Race</h3>
+      <p>Migrates imports to <span class="code-pill">go.ate.dev/substrate/api/ateapi/v1</span>, seeds OpenFGA <span class="code-pill">AccessPolicy</span>, and detaches <span class="code-pill">Server.SuspendTask</span> via <span class="code-pill">context.WithoutCancel(ctx)</span>.</p>
+    </div>
+    <div class="card">
+      <h3>Issue #518 • Volume State</h3>
+      <p>Persists <span class="code-pill">workspace.AXDir</span> at <span class="code-pill">/workspace/.ax</span> across <span class="code-pill">SNAPSHOT_FIDELITY_VOLUMES</span> restores and isolates <span class="code-pill">/workspace/.ax-state/&lt;task&gt;.json</span>.</p>
+    </div>
+  </div>
+</section>
+
+<section class="slide" data-title="Live GKE Latency Benchmarks &amp; Resources" data-notes="Every latency number is measured on a live GKE cluster running 4 warm ateworker-gvisor sandboxes.">
+  <div class="slide-header">
+    <h2>7. Live GKE Benchmarks &amp; Reproducible Deliverables</h2>
+  </div>
+  <div class="grid-4col">
+    <div class="card">
+      <div class="kpi-number">80ms</div>
+      <div class="kpi-label">In-Cluster Smart-HTTP Git Clone</div>
+    </div>
+    <div class="card">
+      <div class="kpi-number">42.6ms</div>
+      <div class="kpi-label">Cloud Storage Volume Checkpoint</div>
+    </div>
+    <div class="card">
+      <div class="kpi-number">61ms</div>
+      <div class="kpi-label">SuspendTask Slot Reclamation</div>
+    </div>
+    <div class="card">
+      <div class="kpi-number">0.82s</div>
+      <div class="kpi-label">Selective Polyglot Hot-Reload</div>
+    </div>
+  </div>
+  <div class="card" style="margin-top: 16px;">
+    <ul class="slide-list">
+      <li><strong>GitHub Repository</strong>: <span class="code-pill">https://github.com/gke-demos/ax-bug-bash</span> (<span class="code-pill">ADR-0001</span> through <span class="code-pill">ADR-0013</span>)</li>
+      <li><strong>BOM-20 Blog Post &amp; 5-Lab Tutorial</strong>: <span class="code-pill">docs/blog/self-spawning-bug-bash-tree-on-google-ax.md</span> &amp; <span class="code-pill">docs/tutorial/build-a-self-spawning-bug-bash-tree.md</span></li>
+      <li><strong>Upstream Patch Guide</strong>: <span class="code-pill">docs/upstream/google-ax-v060-patches.md</span> (<span class="code-pill">deploy/ax-server/ax-server-v061.patch</span>)</li>
+    </ul>
+  </div>
+</section>
