@@ -23,6 +23,8 @@ services/**/.venv/
 /tmp/
 /tmp/ax-live-gke-eval-report.json
 ax-live-gke-eval-report.json
+demo.mp4
+*.mp4
 *.log
 
 # OS and IDE files
