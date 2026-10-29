@@ -1,6 +1,7 @@
 package gateway_test
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -734,6 +735,135 @@ func TestMultiHarnessPackagingAndCLIWrappers(t *testing.T) {
 		}
 	}
 }
+
+func TestGeminiCascadeFallsBackOn401And403AndRemoteSessionClientQueriesGateway(t *testing.T) {
+	if !gateway.ShouldFallback(http.StatusUnauthorized, nil) {
+		t.Fatalf("expected ShouldFallback(401, nil) to be true")
+	}
+	if !gateway.ShouldFallback(http.StatusForbidden, nil) {
+		t.Fatalf("expected ShouldFallback(403, nil) to be true")
+	}
+	if gateway.ShouldFallback(http.StatusBadRequest, nil) {
+		t.Fatalf("expected ShouldFallback(400, nil) to be false")
+	}
+	if gateway.ShouldFallback(http.StatusOK, nil) {
+		t.Fatalf("expected ShouldFallback(200, nil) to be false")
+	}
+
+	var attemptedModels []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		idx := strings.Index(r.URL.Path, "/models/")
+		tail := r.URL.Path[idx+len("/models/"):]
+		model := strings.Split(tail, ":")[0]
+		attemptedModels = append(attemptedModels, model)
+
+		switch model {
+		case "gemini-3.8-flash":
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":{"message":"preview allowlist required"}}`))
+		case "gemini-3.7-flash":
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":{"message":"transient token mismatch"}}`))
+		case "gemini-3.6-flash":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"candidates": [{
+					"content": {
+						"role": "model",
+						"parts": [{"text": "Patched checkout-service via gemini-3.6-flash."}]
+					}
+				}],
+				"usageMetadata": {
+					"promptTokenCount": 95,
+					"candidatesTokenCount": 40,
+					"totalTokenCount": 135
+				}
+			}`))
+		default:
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer upstream.Close()
+
+	cfg := gateway.DefaultConfig()
+	cfg.ProjectID = "ax-demo-project"
+	cfg.AgentPlatformBaseURL = upstream.URL
+	srv := gateway.NewServer(cfg, gateway.StaticTokenFunc("wi-token"))
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Post(
+		ts.URL+"/s/fixer-auth-cascade/v1beta/models/gemini-3.8-flash:generateContent",
+		"application/json",
+		jsonReader(`{"contents":[{"role":"user","parts":[{"text":"Fix INC-102 checkout-service"}]}]}`),
+	)
+	if err != nil {
+		t.Fatalf("POST generateContent: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK after 403/401 cascade fallback, got %d", resp.StatusCode)
+	}
+
+	wantOrder := []string{"gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"}
+	if !reflect.DeepEqual(attemptedModels, wantOrder) {
+		t.Fatalf("attemptedModels = %v, want %v", attemptedModels, wantOrder)
+	}
+	if got := resp.Header.Get("X-AX-Active-Model"); got != "gemini-3.6-flash" {
+		t.Errorf("X-AX-Active-Model = %q, want gemini-3.6-flash", got)
+	}
+	if got := resp.Header.Get("X-AX-Source-Provenance"); got != string(gateway.ProvenanceLive) {
+		t.Errorf("X-AX-Source-Provenance = %q, want LIVE", got)
+	}
+
+	// Verify remote session query client against GET /api/gateway/sessions and /api/gateway/sessions/{task}
+	client := gateway.NewClient(ts.URL, nil)
+	ctx := context.Background()
+	remoteCfg, err := client.GetConfig(ctx)
+	if err != nil {
+		t.Fatalf("client.GetConfig failed: %v", err)
+	}
+	if !reflect.DeepEqual(remoteCfg.FallbackCascade, gateway.DefaultFallbackCascade) {
+		t.Errorf("remoteCfg.FallbackCascade = %v, want %v", remoteCfg.FallbackCascade, gateway.DefaultFallbackCascade)
+	}
+
+	snap, err := client.QuerySessions(ctx)
+	if err != nil {
+		t.Fatalf("client.QuerySessions failed: %v", err)
+	}
+	if len(snap.Sessions) != 1 || snap.Sessions[0].TaskName != "fixer-auth-cascade" {
+		t.Fatalf("unexpected sessions snapshot: %+v", snap.Sessions)
+	}
+	if len(snap.Calls) != 1 || snap.Calls[0].ActiveModel != "gemini-3.6-flash" {
+		t.Fatalf("unexpected calls snapshot: %+v", snap.Calls)
+	}
+
+	sessionsList, err := client.ListSessions(ctx)
+	if err != nil || len(sessionsList) != 1 {
+		t.Fatalf("client.ListSessions failed: err=%v sessions=%+v", err, sessionsList)
+	}
+
+	sess, found, err := client.GetSession(ctx, "fixer-auth-cascade")
+	if err != nil {
+		t.Fatalf("client.GetSession failed: %v", err)
+	}
+	if !found {
+		t.Fatalf("expected session fixer-auth-cascade to be found")
+	}
+	if sess.ActiveModel != "gemini-3.6-flash" || sess.SourceProvenance != gateway.ProvenanceLive || sess.CascadeFallbacks != 2 {
+		t.Errorf("unexpected session details: %+v", sess)
+	}
+
+	_, foundMissing, err := client.GetSession(ctx, "nonexistent-task")
+	if err != nil {
+		t.Fatalf("client.GetSession(nonexistent) returned error: %v", err)
+	}
+	if foundMissing {
+		t.Errorf("expected nonexistent-task found=false")
+	}
+}
+
 
 
 

@@ -178,12 +178,27 @@ def run_turn(contents: list[dict]) -> str:
     return "(max tool iterations reached)"
 
 
+def parse_prompt_args(argv: list[str]) -> str:
+    filtered = []
+    skip_next = False
+    for idx, arg in enumerate(argv):
+        if skip_next:
+            skip_next = False
+            continue
+        if arg in ("-p", "--print", "--no-session", "run"):
+            continue
+        if arg in ("-m", "--model", "--provider", "--config") and idx + 1 < len(argv):
+            skip_next = True
+            continue
+        filtered.append(arg)
+    return "\n".join(filtered).strip()
+
+
 def main() -> int:
     os.makedirs(WORKSPACE, exist_ok=True)
     os.chdir(WORKSPACE)
 
-    args = [a for a in sys.argv[1:] if a not in ("-p", "--print", "run")]
-    prompt = " ".join(args).strip() or f"Execute TDD repair for {TASK_NAME}"
+    prompt = parse_prompt_args(sys.argv[1:]) or f"Execute TDD repair for {TASK_NAME}"
     contents = [{"role": "user", "parts": [{"text": prompt}]}]
     print(run_turn(contents))
     return 0

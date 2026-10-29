@@ -59,7 +59,9 @@ func ShouldFallback(statusCode int, err error) bool {
 		return true
 	}
 	switch statusCode {
-	case http.StatusNotFound,
+	case http.StatusUnauthorized,
+		http.StatusForbidden,
+		http.StatusNotFound,
 		http.StatusRequestTimeout,
 		http.StatusTooManyRequests,
 		http.StatusInternalServerError,

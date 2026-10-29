@@ -1,5 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "permission": "allow",
   "model": "agent-platform-gateway/gemini-3.8-flash",
   "small_model": "agent-platform-gateway/gemini-3.5-flash",
   "provider": {

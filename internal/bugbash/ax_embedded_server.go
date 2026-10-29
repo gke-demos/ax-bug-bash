@@ -21,6 +21,9 @@ import (
 // SubstrateWorkerNode represents an Agent Substrate v0.6.0 ateworker-gvisor warm sandbox node.
 type SubstrateWorkerNode struct {
 	WorkerID            string   `json:"worker_id"`
+	WorkerPod           string   `json:"worker_pod,omitempty"`
+	WorkerPool          string   `json:"worker_pool,omitempty"`
+	NodeName            string   `json:"node_name,omitempty"`
 	RuntimeClass        string   `json:"runtime_class"`
 	SnapshotFidelity    string   `json:"snapshot_fidelity"`
 	WorkerIP            string   `json:"worker_ip"`
@@ -28,6 +31,8 @@ type SubstrateWorkerNode struct {
 	UsedCPUMillicores   int      `json:"used_cpu_millicores"`
 	TotalMemoryMB       int      `json:"total_memory_mb"`
 	UsedMemoryMB        int      `json:"used_memory_mb"`
+	TotalActorSlots     int      `json:"total_actor_slots,omitempty"`
+	UsedActorSlots      int      `json:"used_actor_slots,omitempty"`
 	ActiveTasks         []string `json:"active_tasks"`
 	SuspendedSnapshots  []string `json:"suspended_snapshots"`
 	ReclaimedSlotsCount int      `json:"reclaimed_slots_count"`
@@ -45,6 +50,8 @@ type WorkerPoolSummary struct {
 	AllocatedCPUMillicores int                   `json:"allocated_cpu_millicores"`
 	TotalMemoryMB          int                   `json:"total_memory_mb"`
 	AllocatedMemoryMB      int                   `json:"allocated_memory_mb"`
+	TotalActorSlots        int                   `json:"total_actor_slots,omitempty"`
+	AllocatedActorSlots    int                   `json:"allocated_actor_slots,omitempty"`
 }
 
 type taskPlacement struct {

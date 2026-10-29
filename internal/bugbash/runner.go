@@ -102,7 +102,15 @@ func RunCustomTaskRunner(ctx context.Context, opts CustomRunnerOptions) error {
 	if task != nil {
 		wsPath = task.GetSpec().WorkspacePath()
 	}
+	_ = os.MkdirAll(filepath.Join(wsPath, ".ax"), 0o755)
 	_ = os.MkdirAll(filepath.Join(wsPath, AXStateDirName), 0o755)
+
+	taskRole := "child-fixer"
+	if task != nil && task.GetSpec().GetConfig() != nil {
+		if r, ok := task.GetSpec().GetConfig().AsMap()["role"].(string); ok && strings.TrimSpace(r) != "" {
+			taskRole = strings.TrimSpace(r)
+		}
+	}
 
 	runCtx, runCancel := context.WithCancel(ctx)
 	defer runCancel()
@@ -122,6 +130,31 @@ func RunCustomTaskRunner(ctx context.Context, opts CustomRunnerOptions) error {
 				if task.GetMetadata().GetAtespace() != "" {
 					atespace = task.GetMetadata().GetAtespace()
 				}
+			}
+
+			if taskRole == "root-triage" {
+				if exit.ExitCode != 0 && observerCallbackURL != "" {
+					_ = PostObserverEvent(context.Background(), observerCallbackURL, ObserverCallbackEvent{
+						ExecutionID:  os.Getenv("AX_EXECUTION_ID"),
+						RootTaskName: taskName,
+						EventType:    ObserverEventRootFailed,
+						IncidentID:   os.Getenv("AX_INCIDENT_ID"),
+						Error:        fmt.Sprintf("root task exited with code %d", exit.ExitCode),
+						Timestamp:    time.Now().UTC(),
+					})
+				}
+				if axServerAddr != "" {
+					if err := suspendTaskViaGRPC(axServerAddr, atespace, taskName); err != nil {
+						slog.Warn("OnCommandExit failed to call SuspendTask on ax-server", "task", taskName, "addr", axServerAddr, "error", err)
+					}
+				}
+				if opts.OnExitDone != nil {
+					opts.OnExitDone(ChildTaskResult{TaskName: taskName, ExitCode: exit.ExitCode, Suspended: true}, exit)
+				}
+				if opts.StopRunnerOnCommandExit {
+					runCancel()
+				}
+				return
 			}
 
 			res, err := LoadTaskStateSnapshot(wsPath, taskName)
@@ -161,7 +194,24 @@ func RunCustomTaskRunner(ctx context.Context, opts CustomRunnerOptions) error {
 			_ = SaveTaskStateSnapshot(wsPath, res)
 
 			if observerCallbackURL != "" {
-				postObserverCallback(observerCallbackURL, res)
+				if res.BranchName != "" {
+					resCopy := res
+					_ = PostObserverEvent(context.Background(), observerCallbackURL, ObserverCallbackEvent{
+						ExecutionID:      os.Getenv("AX_EXECUTION_ID"),
+						RootTaskName:     firstNonEmptyString(res.ParentTask, os.Getenv("AX_ROOT_TASK_NAME")),
+						TaskName:         taskName,
+						Service:          res.Service,
+						EventType:        ObserverEventChildCompleted,
+						IncidentID:       res.IncidentID,
+						HarnessMode:      res.Harness,
+						RequestedModel:   res.RequestedModel,
+						SourceProvenance: res.SourceProvenance,
+						Child:            &resCopy,
+						Timestamp:        now,
+					})
+				} else {
+					postObserverCallback(observerCallbackURL, res)
+				}
 			}
 			if axServerAddr != "" {
 				if err := suspendTaskViaGRPC(axServerAddr, atespace, taskName); err != nil {
@@ -185,6 +235,7 @@ type TaskExecutionOptions struct {
 	Storefront       *storefront.Runtime
 	AutoCompleteRoot bool
 	ModelGatewayURL  string
+	RoleOverride     string
 }
 
 // ExecuteTaskFromMetadataEndpoint runs inside the supervised child process spawned by runner.Run.
@@ -211,6 +262,7 @@ func ExecuteTaskFromMetadataEndpoint(ctx context.Context, opts ...TaskExecutionO
 		atespace = "default"
 	}
 	wsPath := task.GetSpec().WorkspacePath()
+	_ = os.MkdirAll(filepath.Join(wsPath, ".ax"), 0o755)
 	_ = os.MkdirAll(filepath.Join(wsPath, AXStateDirName), 0o755)
 
 	gwURL := strings.TrimSpace(opt.ModelGatewayURL)
@@ -225,11 +277,38 @@ func ExecuteTaskFromMetadataEndpoint(ctx context.Context, opts ...TaskExecutionO
 			role = strings.TrimSpace(r)
 		}
 	}
+	if strings.TrimSpace(opt.RoleOverride) != "" {
+		role = strings.TrimSpace(opt.RoleOverride)
+	}
+	if role != "root-triage" && role != "child-fixer" {
+		return fmt.Errorf("unsupported task role %q", role)
+	}
+
+	storefrontGitURL := strings.TrimSpace(os.Getenv("STOREFRONT_GIT_URL"))
 
 	if role == "root-triage" {
 		alert, err := ParseAlertPayloadFromTaskConfig(cfgStruct)
 		if err != nil {
 			return fmt.Errorf("parsing root triage alert config: %w", err)
+		}
+		// In LIVE_GKE sandbox execution (when STOREFRONT_GIT_URL is set and in-process AutoCompleteRoot is off),
+		// run the zero-trust in-sandbox Root Task Git-branch verification gate.
+		if !opt.AutoCompleteRoot && opt.Storefront == nil && os.Getenv("AX_AUTO_COMPLETE_ROOT") != "1" && storefrontGitURL != "" {
+			_, err := ExecuteSandboxRootTask(ctx, SandboxRootOptions{
+				ExecutionID:         os.Getenv("AX_EXECUTION_ID"),
+				RootTaskName:        taskName,
+				Atespace:            atespace,
+				WorkspaceName:       task.GetSpec().GetWorkspace().GetName(),
+				WorkspaceDir:        wsPath,
+				Alert:               alert,
+				AXServerAddr:        os.Getenv("AX_SERVER_ADDR"),
+				TaskRunnerImage:     firstNonEmptyString(task.GetSpec().GetImage(), os.Getenv("AX_DEFAULT_TASK_IMAGE"), os.Getenv("TASK_RUNNER_IMAGE")),
+				StorefrontGitURL:    storefrontGitURL,
+				ModelGatewayURL:     gwURL,
+				ObserverCallbackURL: os.Getenv("OBSERVER_CALLBACK_URL"),
+				LokiURL:             os.Getenv("LOKI_URL"),
+			})
+			return err
 		}
 		plan, err := AnalyzeIncidentTraces(alert, wsPath)
 		if err != nil {
@@ -312,6 +391,18 @@ func ExecuteTaskFromMetadataEndpoint(ctx context.Context, opts ...TaskExecutionO
 	mission, err := ParseChildMissionFromTaskConfig(taskName, cfgStruct)
 	if err != nil {
 		return fmt.Errorf("parsing child fixer mission: %w", err)
+	}
+	if storefrontGitURL != "" || hasGitOriginRemote(wsPath) {
+		_, err = ExecuteSandboxChildTask(ctx, SandboxChildOptions{
+			ExecutionID:         os.Getenv("AX_EXECUTION_ID"),
+			RootTaskName:        firstNonEmptyString(mission.ParentTask, os.Getenv("AX_ROOT_TASK_NAME")),
+			Mission:             mission,
+			WorkspaceDir:        wsPath,
+			StorefrontGitURL:    storefrontGitURL,
+			ModelGatewayURL:     gwURL,
+			ObserverCallbackURL: os.Getenv("OBSERVER_CALLBACK_URL"),
+		})
+		return err
 	}
 	_, err = ExecuteChildFixerTDD(ctx, ChildFixerConfig{
 		Mission:         mission,
