@@ -71,3 +71,11 @@ _Avoid_: Monolithic agent framework, single-layer CRD wrapper.
 **Upstream Compatibility Overlay**:
 The surgical `ax-server` and guest-runner patches (`Issue #482` `/healthz` `WakeupProbe` and per-actor `EgressPolicy` before `ResumeActor`, `Issue #511` OpenFGA `AccessPolicy` and detached `context.WithoutCancel(ctx)` in `SuspendTask`, and `Issue #518` `/workspace/.ax` volume-snapshot persistence) that bridge upstream `google/ax` (`4b7bf6f`) to Agent Substrate v0.6.0 on GKE.
 _Avoid_: Permanent fork, monkey patch, workaround hack.
+
+**Layer Selection Matrix**:
+The architectural decision rubric that guides developers on when to target Layer 1 directly (raw Agent Substrate Actors and volume snapshots), Layer 2 (`agent-substrate/env` guest lifecycle services), or Layer 3 (`google/ax` declarative Tasks, Workspaces, Models, and Custom Runners).
+_Avoid_: Feature comparison table, marketing tier list.
+
+**Stage Warmup Gate**:
+The pre-presentation readiness verification that resets the Retail Storefront to its clean baseline revision, drains firing monitoring alerts, confirms all warm sandbox worker slots are ready, and verifies local port-forwards across all three surfaces before a live demonstration.
+_Avoid_: Manual setup checklist, ad-hoc cluster restart.
