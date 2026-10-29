@@ -272,6 +272,7 @@
     });
 
     document.getElementById("heal-incident-btn")?.addEventListener("click", async () => {
+      await fetch("/api/incidents/reset", { method: "POST" });
       await fetch("/api/incidents/heal", { method: "POST" });
       renderErrorBanner(null);
       await refreshState();
