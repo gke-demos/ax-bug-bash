@@ -325,11 +325,7 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 		"Makefile",
 		"README.md",
 		"docs/blog/self-spawning-bug-bash-tree-on-google-ax.md",
-	}
-
-	optionalTutorialRel := "docs/tutorial/build-a-self-spawning-bug-bash-tree.md"
-	if _, err := os.Stat(filepath.Join(repoRoot, optionalTutorialRel)); err == nil {
-		filesToScan = append(filesToScan, optionalTutorialRel)
+		"docs/tutorial/build-a-self-spawning-bug-bash-tree.md",
 	}
 
 	forbiddenTokens := forbiddenHygieneTokens()
@@ -471,6 +467,9 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 		"gemini-3.5-flash",
 		"Gemini Enterprise Agent Platform",
 		"Agent Substrate",
+		"docs/blog/self-spawning-bug-bash-tree-on-google-ax.md",
+		"docs/tutorial/build-a-self-spawning-bug-bash-tree.md",
+		"docs/assets/ax-live-gke-terminal.gif",
 	})
 
 	requireSnippets("docs/blog/self-spawning-bug-bash-tree-on-google-ax.md", []string{
@@ -490,6 +489,24 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 		"42.6ms",
 		"61ms",
 		"docs/assets/ax-live-gke-terminal.gif",
+	})
+
+	requireSnippets("docs/tutorial/build-a-self-spawning-bug-bash-tree.md", []string{
+		"Lab 1",
+		"Lab 2",
+		"Lab 3",
+		"Lab 4",
+		"Lab 5",
+		"make run-local",
+		"make eval",
+		"runner.Run",
+		"OnCommandExit",
+		"SuspendTask",
+		"SNAPSHOT_FIDELITY_VOLUMES",
+		"Gemini Enterprise Agent Platform",
+		"make deploy",
+		"make eval-live-gke",
+		"/tmp/ax-live-gke-eval-report.json",
 	})
 
 	report.Passed = len(report.Violations) == 0 && len(report.CheckedFiles) == len(filesToScan)

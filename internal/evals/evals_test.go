@@ -120,13 +120,14 @@ func TestRepositoryHygieneAndManifestContract(t *testing.T) {
 	if !hygiene.Passed {
 		t.Fatalf("expected hygiene & manifest contract Passed=true, got violations: %v", hygiene.Violations)
 	}
-	if len(hygiene.CheckedFiles) < 10 {
-		t.Errorf("len(CheckedFiles) = %d, want >= 10 (including 03-gmp-podmonitoring.yaml and internal/observer/about_catalog.go)", len(hygiene.CheckedFiles))
+	if len(hygiene.CheckedFiles) < 12 {
+		t.Errorf("len(CheckedFiles) = %d, want >= 12 (including 03-gmp-podmonitoring.yaml, internal/observer/about_catalog.go, blog, and tutorial)", len(hygiene.CheckedFiles))
 	}
 	wantChecked := map[string]bool{
 		"manifests/monitoring/03-gmp-podmonitoring.yaml":            false,
 		"internal/observer/about_catalog.go":                        false,
 		"docs/blog/self-spawning-bug-bash-tree-on-google-ax.md":     false,
+		"docs/tutorial/build-a-self-spawning-bug-bash-tree.md":      false,
 	}
 	for _, f := range hygiene.CheckedFiles {
 		if _, ok := wantChecked[f]; ok {
