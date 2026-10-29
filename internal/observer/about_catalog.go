@@ -188,9 +188,10 @@ var expectedADRFileList = []string{
 	"0009-polyglot-http-mesh-and-zero-downtime-git-hot-reload.md",
 	"0010-interactive-about-architecture-catalog-and-drift-verification.md",
 	"0011-two-tier-evaluation-chaos-soak-and-gcp-dual-export-verification.md",
+	"0012-bom20-blog-tutorial-and-stage-walkthrough-contract.md",
 }
 
-// ExpectedADRFilenames returns the 11 canonical ADR filenames in docs/adr/.
+// ExpectedADRFilenames returns the canonical ADR filenames in docs/adr/.
 func ExpectedADRFilenames() []string {
 	return append([]string(nil), expectedADRFileList...)
 }
@@ -1185,6 +1186,22 @@ func BuildArchitectureTopologyCatalog(rt CatalogRuntimeTelemetry) ArchitectureTo
 			RelatedNodes:    []string{"prometheus-alertmanager", "loki-grafana", "ax-observer", "ateworker-gvisor-pool"},
 			RuntimeCounters: commonCounters(map[string]string{"eval_tiers": "Tier 1 Hermetic + Tier 2 Live GKE"}),
 		},
+		{
+			ID:       "ADR-0012",
+			Number:   12,
+			Filename: expectedADRFileList[11],
+			Title:    "Flagship BOM-20 Blog Narrative, Five-Lab Developer Tutorial, and Stage Walkthrough Contract",
+			Status:   "Accepted",
+			Category: "Documentation & Launch",
+			Summary:  "Defines the 7-section BOM-20 technical blog narrative across the Three-Layer Substrate Stack, the 5-lab developer tutorial from SIMULATED mode to live GKE soak, and automated humanizer/stage-safe prose verification.",
+			KeyDecisions: []string{
+				"7-section BOM-20 blog post framing the Three-Layer Substrate Stack with live GKE benchmarks",
+				"5-lab reproducible tutorial from make run-local to make deploy and make eval-live-gke",
+				"Automated humanizer/unslop and stage-safe hygiene checks plus Google Doc sync",
+			},
+			RelatedNodes:    []string{"ax-observer", "ax-server-openfga", "model-gateway", "ateworker-gvisor-pool"},
+			RuntimeCounters: commonCounters(map[string]string{"launch_deliverables": "Blog + 5-Lab Tutorial + Stage Walkthrough"}),
+		},
 	}
 
 	adrs = enrichADRsFromDisk(adrs)
@@ -1350,9 +1367,9 @@ func VerifyArchitectureCatalogDrift(repoRoot string) error {
 		return fmt.Errorf("catalog geometry validation failed: %w", err)
 	}
 
-	// 1. Verify all 11 ADR files exist on disk and are non-empty
-	if len(cat.ADRs) != 11 {
-		return fmt.Errorf("expected 11 ADRs in catalog, got %d", len(cat.ADRs))
+	// 1. Verify all ADR files exist on disk and are non-empty
+	if len(cat.ADRs) != len(expectedADRFileList) {
+		return fmt.Errorf("expected %d ADRs in catalog, got %d", len(expectedADRFileList), len(cat.ADRs))
 	}
 	for i, adr := range cat.ADRs {
 		expectedFile := expectedADRFileList[i]

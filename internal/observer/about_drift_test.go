@@ -72,8 +72,8 @@ func TestAboutArchitectureCatalogEndpointAndGeometry(t *testing.T) {
 	if len(cat.LifecycleStages) != 6 {
 		t.Fatalf("len(LifecycleStages) = %d, want 6 interactive lifecycle stages", len(cat.LifecycleStages))
 	}
-	if len(cat.ADRs) != 11 {
-		t.Fatalf("len(ADRs) = %d, want 11 ADR cards (ADR-0001..ADR-0011)", len(cat.ADRs))
+	if len(cat.ADRs) != len(observer.ExpectedADRFilenames()) {
+		t.Fatalf("len(ADRs) = %d, want %d ADR cards", len(cat.ADRs), len(observer.ExpectedADRFilenames()))
 	}
 
 	if err := observer.ValidateCatalogGeometry(cat); err != nil {
@@ -168,8 +168,8 @@ func TestVerifyArchitectureCatalogDrift(t *testing.T) {
 	// Test partial repo missing a single harness binary fails closed
 	partialRepo := t.TempDir()
 	_ = os.MkdirAll(filepath.Join(partialRepo, "docs", "adr"), 0o755)
-	for i := 1; i <= 11; i++ {
-		name := filepath.Join(partialRepo, "docs", "adr", observer.ExpectedADRFilenames()[i-1])
+	for _, adrName := range observer.ExpectedADRFilenames() {
+		name := filepath.Join(partialRepo, "docs", "adr", adrName)
 		_ = os.WriteFile(name, []byte("# ADR\n\n## Status\nAccepted\n"), 0o644)
 	}
 	if err := observer.VerifyArchitectureCatalogDrift(partialRepo); err == nil {
