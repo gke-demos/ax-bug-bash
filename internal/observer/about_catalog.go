@@ -190,6 +190,7 @@ var expectedADRFileList = []string{
 	"0011-two-tier-evaluation-chaos-soak-and-gcp-dual-export-verification.md",
 	"0012-bom20-blog-tutorial-and-stage-walkthrough-contract.md",
 	"0013-upstream-google-ax-v060-compatibility-overlay.md",
+	"0014-bom19-three-layer-architecture-guide-and-stage-warmup-gate.md",
 }
 
 // ExpectedADRFilenames returns the canonical ADR filenames in docs/adr/.
@@ -1218,6 +1219,22 @@ func BuildArchitectureTopologyCatalog(rt CatalogRuntimeTelemetry) ArchitectureTo
 			},
 			RelatedNodes:    []string{"ax-server-openfga", "ateworker-gvisor-pool", "ax-observer"},
 			RuntimeCounters: commonCounters(map[string]string{"overlay_patches": "3 (#482, #511, #518)", "substrate_api": "substrate.ateapi.v1.Control"}),
+		},
+		{
+			ID:       "ADR-0014",
+			Number:   14,
+			Filename: expectedADRFileList[13],
+			Title:    "BOM-19 Three-Layer Architecture Guide (substrate, env, ax), Layer Selection Matrix, and Stage Warmup Gate",
+			Status:   "Accepted",
+			Category: "Documentation & Launch",
+			Summary:  "Defines the 5-section BOM-19 three-layer architecture guide (docs/architecture/three-layer-substrate-env-ax.md), the 7-workload Layer Selection Matrix across substrate, env, and google/ax, the Stage Presenter Runbook, and the make stage-ready Stage Warmup Gate.",
+			KeyDecisions: []string{
+				"5-section BOM-19 architecture guide covering Layer 1 (substrate), Layer 2 (env), and Layer 3 (google/ax)",
+				"7-workload Layer Selection Matrix mapping developer patterns to Layer 1, Layer 1+2, or Full Three-Layer Stack",
+				"Standalone BOM-19 Google Doc deliverable and one-command make stage-ready Stage Warmup Gate",
+			},
+			RelatedNodes:    []string{"ax-observer", "ax-server-openfga", "ateworker-gvisor-pool"},
+			RuntimeCounters: commonCounters(map[string]string{"layer_matrix": "7 workload patterns", "catalog_adrs": "14 ADRs verified"}),
 		},
 	}
 
