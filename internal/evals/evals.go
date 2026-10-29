@@ -322,6 +322,8 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 		"internal/observer/about_catalog.go",
 		"hack/deploy-gke.sh",
 		"hack/run-local.sh",
+		"hack/record-stage-walkthrough.sh",
+		"hack/record-terminal-demo.py",
 		"Makefile",
 		"README.md",
 		"docs/blog/self-spawning-bug-bash-tree-on-google-ax.md",
@@ -442,6 +444,27 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 		"./cmd/ax-observer",
 	})
 
+	requireSnippets("hack/record-stage-walkthrough.sh", []string{
+		"Xvfb",
+		"ffmpeg",
+		"gbrowser",
+		"anullsrc",
+		"ax-bug-bash-storefront",
+		"/workers",
+		"/about",
+		"/tmp/ax-bug-bash-demo.mp4",
+	})
+
+	requireSnippets("hack/record-terminal-demo.py", []string{
+		"#282828",
+		"#ebdbb2",
+		"#ff5f56",
+		"#ffbd2e",
+		"#27c93f",
+		"workerpools.ate.dev",
+		"docs/assets/ax-live-gke-terminal.gif",
+	})
+
 	requireSnippets("Makefile", []string{
 		"build:",
 		"test:",
@@ -451,6 +474,7 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 		"images:",
 		"deploy:",
 		"verify-manifests:",
+		"record-demo:",
 	})
 
 	requireSnippets("README.md", []string{
@@ -508,6 +532,23 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 		"make eval-live-gke",
 		"/tmp/ax-live-gke-eval-report.json",
 	})
+
+	gifRel := "docs/assets/ax-live-gke-terminal.gif"
+	gifFull := filepath.Join(repoRoot, gifRel)
+	gifBytes, gifErr := os.ReadFile(gifFull)
+	if gifErr != nil {
+		report.Violations = append(report.Violations, fmt.Sprintf("missing or unreadable %s: %v", gifRel, gifErr))
+	} else {
+		if len(gifBytes) <= 10*1024 {
+			report.Violations = append(report.Violations, fmt.Sprintf("%s size = %d bytes, want > 10 KB", gifRel, len(gifBytes)))
+		}
+		if len(gifBytes) >= 5*1024*1024 {
+			report.Violations = append(report.Violations, fmt.Sprintf("%s size = %d bytes, want < 5 MB", gifRel, len(gifBytes)))
+		}
+		if !bytes.HasPrefix(gifBytes, []byte("GIF89a")) && !bytes.HasPrefix(gifBytes, []byte("GIF87a")) {
+			report.Violations = append(report.Violations, fmt.Sprintf("%s does not begin with GIF89a or GIF87a header", gifRel))
+		}
+	}
 
 	report.Passed = len(report.Violations) == 0 && len(report.CheckedFiles) == len(filesToScan)
 	return report, nil
