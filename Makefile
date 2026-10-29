@@ -1,4 +1,4 @@
-.PHONY: build test eval eval-live-gke run-local images deploy verify-manifests clean
+.PHONY: build test eval eval-live-gke run-local images deploy verify-manifests record-demo clean
 
 KUBE_CONTEXT ?= $(shell kubectl config current-context 2>/dev/null || echo "gke-default-context")
 PROJECT_ID   ?= $(shell gcloud config get-value project 2>/dev/null || echo "example-gcp-project")
@@ -47,6 +47,10 @@ deploy:
 verify-manifests:
 	./hack/deploy-gke.sh --dry-run
 	go test -p 1 -v -run TestRepositoryHygieneAndManifestContract ./internal/evals/...
+
+record-demo:
+	python3 ./hack/record-terminal-demo.py
+	./hack/record-stage-walkthrough.sh
 
 clean:
 	rm -rf bin /tmp/ax-bug-bash-* /tmp/ax-live-gke-eval-report.json
