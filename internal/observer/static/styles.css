@@ -789,3 +789,252 @@ body {
   font-size: 11.5px;
   color: var(--text-muted);
 }
+
+.scenario-card.active {
+  border-color: var(--accent-primary);
+  background: var(--bg-canvas);
+}
+
+/* 3-Tab Interactive /about Architecture Experience */
+.about-status-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+}
+
+.status-strip-item {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.about-tabs-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
+.about-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-weight: 700;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.about-tab-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+}
+
+.about-tab-btn.active {
+  color: var(--accent-primary);
+  background: var(--bg-elevated);
+  border-color: var(--accent-primary);
+}
+
+.about-tab-panel {
+  display: none;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.about-tab-panel.active {
+  display: flex;
+}
+
+.about-pill-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.about-topology-layout {
+  display: grid;
+  grid-template-columns: minmax(640px, 1fr) 360px;
+  gap: 14px;
+  align-items: start;
+}
+
+@media (max-width: 1180px) {
+  .about-topology-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.about-inspector-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.inspector-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.inspector-desc {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.inspector-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.topo-swimlane-rect {
+  fill: var(--bg-surface);
+  stroke: var(--border-subtle);
+  stroke-width: 1.2;
+  opacity: 0.72;
+}
+
+.topo-swimlane-title {
+  fill: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.topo-node-group,
+.lc-stage-node {
+  cursor: pointer;
+}
+
+.topo-node-rect {
+  fill: var(--bg-elevated);
+  stroke: var(--border-strong);
+  stroke-width: 1.6;
+}
+
+.topo-node-group.selected .topo-node-rect,
+.lc-stage-node.active .topo-node-rect {
+  stroke: var(--accent-primary);
+  stroke-width: 2.6;
+}
+
+.topo-node-group.blast-implicated .topo-node-rect {
+  stroke: var(--status-red);
+  stroke-width: 2.6;
+  fill: var(--status-red-bg);
+}
+
+.topo-node-group.blast-active .topo-node-rect,
+.lc-stage-node.completed .topo-node-rect,
+.lc-slot-group.reclaimed_warm .topo-node-rect {
+  stroke: var(--status-green);
+  stroke-width: 2.1;
+}
+
+.lc-slot-group.active_sandbox .topo-node-rect {
+  stroke: var(--accent-primary);
+  stroke-width: 2.4;
+}
+
+.topo-node-group.blast-dimmed {
+  opacity: 0.42;
+}
+
+.topo-node-port {
+  fill: var(--accent-secondary);
+  font-size: 9.8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.topo-edge {
+  fill: none;
+  stroke: var(--accent-primary);
+  stroke-width: 2.1;
+  stroke-dasharray: 6 4;
+}
+
+.topo-edge.active {
+  animation: dashFlow 1.2s linear infinite;
+}
+
+.topo-edge.dimmed {
+  stroke: var(--border-strong);
+  opacity: 0.32;
+}
+
+.topo-pulse-dot {
+  fill: var(--status-green);
+}
+
+.lifecycle-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.lifecycle-pills-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(185px, 1fr));
+  gap: 8px;
+}
+
+.lifecycle-pill {
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.lifecycle-pill.active {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+  background: var(--bg-canvas);
+}
+
+.adr-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 12px;
+}
+
+.adr-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+

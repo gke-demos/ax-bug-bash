@@ -51,6 +51,7 @@
       </a>
 
       <div class="gateway-badges" title="Zero-Secret Agent Platform Model Gateway">
+        <span id="badge-execution-mode" class="pill pill-accent">SIMULATED</span>
         <span id="badge-provenance" class="pill pill-provenance">FIXTURE</span>
         <span id="badge-active-model" class="pill pill-model">gemini-3.8-flash</span>
       </div>
@@ -257,136 +258,154 @@
     </div>
   </main>
 
-  <!-- ROUTE 3: /about (Interactive Architecture & How It Works) -->
+  <!-- ROUTE 3: /about (3-Tab Interactive SVG Architecture Experience · ADR-0010) -->
   <main id="view-about" class="route-view" data-view="/about">
     <div class="about-container">
-      <section class="panel">
-        <div class="panel-header">
-          <div class="panel-title-wrap">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
-            <h2>1. Three Decoupled Production Surfaces &amp; Recursive Bug Bash Tree Topology (ADR-0001..ADR-0005)</h2>
-          </div>
-          <span class="pill pill-accent">Interactive Architecture Topology</span>
+      <!-- Stage-Safe Live Runtime Status Strip -->
+      <section class="about-status-strip" aria-label="Stage-Safe Runtime Telemetry Strip">
+        <div class="status-strip-item">
+          <span class="kpi-label">Execution Mode</span>
+          <strong id="about-stat-mode" class="kpi-value">SIMULATED</strong>
         </div>
-        <div class="about-svg-wrap">
-          <svg viewBox="0 0 980 250" class="arch-svg" role="img" aria-label="Three Decoupled Production Surfaces Topology">
-            <defs>
-              <linearGradient id="grad-flow" x1="0%" y1="0%" x2="100%" y2="0%">
-                <stop offset="0%" stop-color="#38bdf8" />
-                <stop offset="50%" stop-color="#818cf8" />
-                <stop offset="100%" stop-color="#10b981" />
-              </linearGradient>
-            </defs>
-            <!-- Surface 1: Retail Storefront -->
-            <rect x="20" y="30" width="260" height="190" rx="12" class="arch-box" />
-            <text x="40" y="60" class="arch-title">1. Retail Storefront (:3001)</text>
-            <text x="40" y="84" class="arch-sub">5 Polyglot Microservices + Git Server</text>
-            <text x="40" y="112" class="arch-item">• storefront-web (Node.js / TS)</text>
-            <text x="40" y="132" class="arch-item">• checkout-service (Go)</text>
-            <text x="40" y="152" class="arch-item">• shipping-service (Go)</text>
-            <text x="40" y="172" class="arch-item">• pricing-service (Python / FastAPI)</text>
-            <text x="40" y="192" class="arch-item">• inventory-service (Rust / Axum)</text>
-
-            <!-- Arrow 1 -> 2 -->
-            <path d="M 280 105 L 355 105" class="arch-edge-animated" />
-            <text x="292" y="94" class="arch-edge-label">5s Scrape</text>
-
-            <!-- Surface 2: Monitoring Stack -->
-            <rect x="360" y="30" width="260" height="190" rx="12" class="arch-box" />
-            <text x="380" y="60" class="arch-title">2. Monitoring Stack (:3002)</text>
-            <text x="380" y="84" class="arch-sub">Prometheus + Alertmanager + Loki</text>
-            <text x="380" y="112" class="arch-item">• StorefrontHTTP500Spike (for: 0s)</text>
-            <text x="380" y="134" class="arch-item">• Loki Structured 500 Stack Traces</text>
-            <text x="380" y="156" class="arch-item">• Grafana Golden Signals Dashboard</text>
-            <text x="380" y="178" class="arch-item">• GCP Managed Prometheus + Logging</text>
-
-            <!-- Arrow 2 -> 3 -->
-            <path d="M 620 105 L 695 105" class="arch-edge-animated" />
-            <text x="630" y="94" class="arch-edge-label">v4 Webhook</text>
-
-            <!-- Surface 3: AX Observer & google/ax -->
-            <rect x="700" y="30" width="260" height="190" rx="12" class="arch-box" />
-            <text x="720" y="60" class="arch-title">3. AX Observer &amp; google/ax (:3000)</text>
-            <text x="720" y="84" class="arch-sub">Recursive Sub-Task Fan-Out</text>
-            <text x="720" y="112" class="arch-item">• Root Task (triage-&lt;id&gt;) Stack Analysis</text>
-            <text x="720" y="134" class="arch-item">• Child Tasks (fixer-&lt;svc&gt;) Red-Green TDD</text>
-            <text x="720" y="156" class="arch-item">• Custom Runner OnCommandExit + Suspend</text>
-            <text x="720" y="178" class="arch-item">• &lt; 10s Pre-Warmed Git Rollout Heals :3001</text>
-          </svg>
+        <div class="status-strip-item">
+          <span class="kpi-label">Warm gVisor Slots</span>
+          <strong id="about-stat-slots" class="kpi-value">4 Warm / 0 Active</strong>
+        </div>
+        <div class="status-strip-item">
+          <span class="kpi-label">Default Coding Harness</span>
+          <strong id="about-stat-harness" class="kpi-value">multi (antigravity + opencode + pi)</strong>
+        </div>
+        <div class="status-strip-item">
+          <span class="kpi-label">Agent Platform Cascade</span>
+          <strong id="about-stat-model" class="kpi-value">gemini-3.8-flash (4-Tier)</strong>
+        </div>
+        <div class="status-strip-item">
+          <span class="kpi-label">Storefront Git Baseline</span>
+          <strong id="about-stat-baseline" class="kpi-value">baseline-healthy (&lt; 10s Hot-Reload)</strong>
         </div>
       </section>
 
-      <div class="about-grid-2">
-        <section class="panel">
+      <!-- 3-Tab Navigation Header -->
+      <div class="about-tabs-bar" role="tablist" aria-label="Architecture Experience Tabs">
+        <button type="button" class="about-tab-btn active" data-about-tab="topology" role="tab" aria-selected="true">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+          <span>1. System Topology &amp; Blast-Radius Simulator</span>
+        </button>
+        <button type="button" class="about-tab-btn" data-about-tab="lifecycle" role="tab" aria-selected="false">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+          <span>2. Recursive Task-Tree &amp; TDD Lifecycle</span>
+        </button>
+        <button type="button" class="about-tab-btn" data-about-tab="security" role="tab" aria-selected="false">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+          <span>3. Zero-Secret Security &amp; ADR Catalog (11 ADRs)</span>
+        </button>
+      </div>
+
+      <!-- TAB 1: System Topology & Blast-Radius Simulator -->
+      <section id="about-panel-topology" class="about-tab-panel active" data-about-panel="topology">
+        <div class="panel">
           <div class="panel-header">
             <div class="panel-title-wrap">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
-              <h2>2. Zero-Secret Model Gateway &amp; Multi-Harness Sandbox (ADR-0007)</h2>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M6 9v6"></path><path d="M8.6 7.5l6.8 9"></path></svg>
+              <h2>3-Surface Polyglot Mesh &amp; Incident Blast-Radius Pulse Simulator (12 Nodes · 11 Signal Edges)</h2>
             </div>
+            <div id="about-scenario-pills" class="about-pill-bar" role="group" aria-label="Blast-Radius Scenario Selector"></div>
           </div>
-          <div class="about-svg-wrap">
-            <svg viewBox="0 0 460 220" class="arch-svg" role="img" aria-label="Multi-Harness Zero-Secret Model Gateway">
-              <rect x="14" y="20" width="135" height="52" rx="8" class="arch-box" />
-              <text x="26" y="44" class="arch-title">antigravity</text>
-              <text x="26" y="62" class="arch-sub">Gemini v1beta REST</text>
 
-              <rect x="14" y="84" width="135" height="52" rx="8" class="arch-box" />
-              <text x="26" y="108" class="arch-title">opencode</text>
-              <text x="26" y="126" class="arch-sub">/v1/chat/completions</text>
+          <div class="about-topology-layout">
+            <div class="about-svg-wrap">
+              <svg id="about-topology-svg" viewBox="0 0 1200 620" class="arch-svg" role="img" aria-label="Interactive 12-Node System Topology and Blast Radius Simulator"></svg>
+            </div>
 
-              <rect x="14" y="148" width="135" height="52" rx="8" class="arch-box" />
-              <text x="26" y="172" class="arch-title">pi coding agent</text>
-              <text x="26" y="190" class="arch-sub">/v1/chat/completions</text>
-
-              <path d="M 150 46 L 195 110" class="arch-edge-animated" />
-              <path d="M 150 110 L 195 110" class="arch-edge-animated" />
-              <path d="M 150 174 L 195 110" class="arch-edge-animated" />
-
-              <rect x="198" y="28" width="248" height="165" rx="10" class="arch-box" />
-              <text x="212" y="54" class="arch-title">Agent Platform Model Gateway</text>
-              <text x="212" y="74" class="arch-sub">GKE Workload Identity (Zero Sandbox Keys)</text>
-              <text x="212" y="102" class="arch-item">1. gemini-3.8-flash (Primary)</text>
-              <text x="212" y="122" class="arch-item">2. gemini-3.7-flash (Fallback 1)</text>
-              <text x="212" y="142" class="arch-item">3. gemini-3.6-flash (Fallback 2)</text>
-              <text x="212" y="162" class="arch-item">4. gemini-3.5-flash + FIXTURE</text>
-            </svg>
+            <aside id="about-node-inspector" class="about-inspector-card" aria-label="Topology Node and Scenario Inspector">
+              <div class="subcard-label">Interactive Node &amp; Blast-Radius Inspector</div>
+              <h3 id="inspector-node-title" class="inspector-title">Select any Topology Node or Incident Scenario</h3>
+              <div id="inspector-node-badges" class="about-pill-bar"></div>
+              <p id="inspector-node-desc" class="inspector-desc">
+                Click any of the 12 architecture nodes in the SVG canvas to inspect its runtime port, language toolchain, and capabilities, or click INC-101..INC-104 above to simulate selective blast-radius isolation.
+              </p>
+              <ul id="inspector-node-caps" class="inspector-list"></ul>
+              <div id="inspector-scenario-box" class="subcard hidden">
+                <div class="subcard-label">Simulated Scenario Blast Radius</div>
+                <div id="inspector-scenario-title" class="service-name"></div>
+                <div id="inspector-scenario-why" class="service-lang"></div>
+                <button type="button" id="btn-launch-from-about" class="btn-primary">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                  <span>Launch in Bug Bash Tree (⌘K)</span>
+                </button>
+              </div>
+            </aside>
           </div>
-        </section>
+        </div>
+      </section>
 
-        <section class="panel">
+      <!-- TAB 2: Recursive Task-Tree & TDD Lifecycle -->
+      <section id="about-panel-lifecycle" class="about-tab-panel" data-about-panel="lifecycle">
+        <div class="panel">
           <div class="panel-header">
             <div class="panel-title-wrap">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
-              <h2>3. Custom Runner OnCommandExit &amp; SuspendTask Lifecycle (ADR-0004 &amp; ADR-0006)</h2>
+              <h2>6-Stage Recursive Task-Tree &amp; SuspendTask Slot Reclamation Stepper</h2>
+            </div>
+            <div class="lifecycle-controls">
+              <button type="button" id="btn-lc-prev" class="btn-secondary">Step Back</button>
+              <button type="button" id="btn-lc-play" class="btn-primary">Auto-Play</button>
+              <button type="button" id="btn-lc-next" class="btn-secondary">Step Forward</button>
+              <button type="button" id="btn-lc-reset" class="btn-ghost">Reset</button>
             </div>
           </div>
+
+          <div id="lifecycle-stage-pills" class="lifecycle-pills-grid" role="tablist"></div>
+
           <div class="about-svg-wrap">
-            <svg viewBox="0 0 460 220" class="arch-svg" role="img" aria-label="Custom Runner OnCommandExit and SuspendTask State Machine">
-              <rect x="16" y="25" width="195" height="72" rx="8" class="arch-box" />
-              <text x="28" y="50" class="arch-title">1. Reproduce Red (TDD)</text>
-              <text x="28" y="70" class="arch-sub">Write failing Regression Test</text>
-
-              <path d="M 212 61 L 248 61" class="arch-edge-animated" />
-
-              <rect x="250" y="25" width="195" height="72" rx="8" class="arch-box" />
-              <text x="262" y="50" class="arch-title">2. Patch Green (TDD)</text>
-              <text x="262" y="70" class="arch-sub">Fix service; all tests pass</text>
-
-              <path d="M 347 98 L 347 125" class="arch-edge-animated" />
-
-              <rect x="250" y="128" width="195" height="72" rx="8" class="arch-box" />
-              <text x="262" y="153" class="arch-title">3. runner.Run OnCommandExit</text>
-              <text x="262" y="173" class="arch-sub">Save /workspace/.ax-state</text>
-
-              <path d="M 248 164 L 212 164" class="arch-edge-animated" />
-
-              <rect x="16" y="128" width="195" height="72" rx="8" class="arch-box" />
-              <text x="28" y="153" class="arch-title">4. gRPC SuspendTask</text>
-              <text x="28" y="173" class="arch-sub">Reclaim ateworker-gvisor slot</text>
-            </svg>
+            <svg id="about-lifecycle-svg" viewBox="0 0 1120 330" class="arch-svg" role="img" aria-label="Recursive Task-Tree and Warm Sandbox Slot State Machine"></svg>
           </div>
-        </section>
-      </div>
+
+          <div class="about-grid-2">
+            <div class="subcard">
+              <div class="subcard-label" id="lc-stage-subtitle">Stage 1 of 6</div>
+              <h3 id="lc-stage-title" class="inspector-title">1. Alert &amp; Loki LogQL Enrichment</h3>
+              <p id="lc-stage-summary" class="inspector-desc"></p>
+              <div id="lc-slot-badges" class="about-pill-bar"></div>
+            </div>
+            <div class="subcard">
+              <div class="subcard-label" id="lc-protocol-label">Wire Protocol Payload Preview</div>
+              <pre id="lc-protocol-payload" class="code-block">{}</pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 3: Zero-Secret Security & ADR Catalog -->
+      <section id="about-panel-security" class="about-tab-panel" data-about-panel="security">
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title-wrap">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+              <h2>Zero-Secret Two-Hop Token Exchange, OpenFGA RBAC &amp; Gemini Flash Cascade Simulator</h2>
+            </div>
+            <div id="cascade-tier-selector" class="about-pill-bar" role="group" aria-label="Simulate Gemini Flash Cascade Failover Tier"></div>
+          </div>
+
+          <div class="about-svg-wrap">
+            <svg id="about-security-svg" viewBox="0 0 1120 290" class="arch-svg" role="img" aria-label="Zero-Secret Workload Identity Token Exchange and Gemini Flash Cascade"></svg>
+          </div>
+
+          <div id="about-harnesses-grid" class="workers-grid"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title-wrap">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+              <h2>Architecture Decision Records Catalog (ADR-0001 through ADR-0011)</h2>
+            </div>
+            <div id="adr-category-filters" class="about-pill-bar"></div>
+          </div>
+
+          <div id="about-adr-grid" class="adr-cards-grid"></div>
+        </div>
+      </section>
     </div>
   </main>
 
