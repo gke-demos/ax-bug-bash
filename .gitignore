@@ -1,11 +1,31 @@
-.worktrees/
-.cache/
+# Binaries and build artifacts
 bin/
 dist/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.txt
+
+# Polyglot service build caches
 node_modules/
-__pycache__/
-*.pyc
+services/**/node_modules/
+services/**/target/
+services/**/__pycache__/
+services/**/.pytest_cache/
+services/**/.venv/
 .venv/
-target/
+
+# Local runtime state & stage-safe evaluation reports
+.ax-state/
+/tmp/
+/tmp/ax-live-gke-eval-report.json
+ax-live-gke-eval-report.json
 *.log
-.env.local
+
+# OS and IDE files
+.DS_Store
+.idea/
+.vscode/

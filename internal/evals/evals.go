@@ -239,6 +239,8 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 		"manifests/bug-bash-system.yaml",
 		"manifests/monitoring/01-prometheus-alertmanager.yaml",
 		"manifests/monitoring/02-loki-grafana.yaml",
+		"manifests/monitoring/03-gmp-podmonitoring.yaml",
+		"internal/observer/about_catalog.go",
 		"hack/deploy-gke.sh",
 		"hack/run-local.sh",
 		"Makefile",
@@ -251,6 +253,7 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 		"fluid" + " compute",
 		"ate" + "-cluster",
 		"mofi" + "labs",
+		"598464" + "211339",
 		"gke_mofi" + "labs_us-central1-a_ate-cluster",
 		"gke-ate" + "-cluster",
 		"substrate" + "-poc",
@@ -270,12 +273,20 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 		text := string(raw)
 		contentsByFile[rel] = text
 
-		lowerText := strings.ToLower(text)
+		scanText := text
+		if rel == "internal/observer/about_catalog.go" {
+			scanText = stripStageUnsafePatternDefinitions(text)
+		}
+		lowerText := strings.ToLower(scanText)
 		for _, bad := range forbiddenTokens {
 			if strings.Contains(lowerText, strings.ToLower(bad)) {
 				report.Violations = append(report.Violations, fmt.Sprintf("%s contains forbidden string %q", rel, bad))
 			}
 		}
+	}
+
+	if err := observer.VerifyArchitectureCatalogDrift(repoRoot); err != nil {
+		report.Violations = append(report.Violations, fmt.Sprintf("about architecture catalog drift: %v", err))
 	}
 
 	requireSnippets := func(rel string, snippets []string) {
@@ -296,10 +307,12 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 		`ate.dev/api-access: "true"`,
 		"kind: AccessPolicy",
 		"user:system:serviceaccount:ax-system:ax-server",
-		"role: admin",
+		"user:system:serviceaccount:ax-bug-bash:ax-observer",
+		"role: owner",
+		"role: viewer",
 		"kind: WorkerPool",
 		"name: ax-bug-bash-workers",
-		"ate.dev/v1alpha1",
+		"ate.dev/v1",
 		"name: gvisor",
 		"name: gvisor-default",
 		"ateworker-gvisor",
@@ -313,14 +326,32 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 	})
 
 	requireSnippets("manifests/bug-bash-system.yaml", []string{
+		"name: ax-postgres",
+		"name: ax-server",
 		"name: model-gateway",
 		"containerPort: 8080",
 		"name: storefront",
 		"containerPort: 3001",
+		"name: checkout-service",
+		"name: shipping-service",
+		"name: pricing-service",
+		"name: inventory-service",
+		"name: storefront-git",
 		"name: ax-observer",
 		"containerPort: 3000",
 		"AX_DEFAULT_TASK_IMAGE",
 		"@sha256:",
+		"${MODEL_GATEWAY_SHA256}",
+		"${STOREFRONT_SHA256}",
+		"${AX_OBSERVER_SHA256}",
+		"${TASK_RUNNER_SHA256}",
+		"${AX_SERVER_SHA256}",
+	})
+
+	requireSnippets("manifests/monitoring/03-gmp-podmonitoring.yaml", []string{
+		"kind: PodMonitoring",
+		"monitoring.googleapis.com/v1",
+		"interval: 10s",
 	})
 
 	requireSnippets("hack/deploy-gke.sh", []string{
@@ -330,6 +361,7 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 		"manifests/ax-v060-overlay.yaml",
 		"manifests/monitoring/01-prometheus-alertmanager.yaml",
 		"manifests/monitoring/02-loki-grafana.yaml",
+		"manifests/monitoring/03-gmp-podmonitoring.yaml",
 		"manifests/bug-bash-system.yaml",
 	})
 
@@ -344,6 +376,7 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 		"build:",
 		"test:",
 		"eval:",
+		"eval-live-gke:",
 		"run-local:",
 		"images:",
 		"deploy:",
@@ -368,6 +401,30 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 
 	report.Passed = len(report.Violations) == 0 && len(report.CheckedFiles) == len(filesToScan)
 	return report, nil
+}
+
+// stripStageUnsafePatternDefinitions strips only the `var stageUnsafePatterns = []*regexp.Regexp{ ... }` block
+// from internal/observer/about_catalog.go so the stage-safe scrubber's own redaction regexes do not self-flag,
+// while still scanning all catalog descriptions, nodes, edges, ADR cards, and comments for forbidden tokens.
+func stripStageUnsafePatternDefinitions(src string) string {
+	var b strings.Builder
+	inBlock := false
+	for _, line := range strings.Split(src, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "var stageUnsafePatterns =") {
+			inBlock = true
+			continue
+		}
+		if inBlock {
+			if trimmed == "}" {
+				inBlock = false
+			}
+			continue
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 var (

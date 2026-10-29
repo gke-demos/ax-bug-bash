@@ -114,14 +114,23 @@ make run-local
 - **Retail Storefront**: `http://localhost:3001`
 - **Monitoring & Alertmanager Preview**: `http://localhost:3002/monitoring`
 
-### 2. Run Unit Tests & 4x4 Evaluation Suite
+### 2. Run Unit Tests & Two-Tier Evaluation Suite
 
 ```bash
 # Run polyglot microservice baseline tests + all Go package tests
 make test
 
-# Run the 4-Scenario x 4-Harness + LIVE Gemini Flash Cascade evaluation suite
+# Run the fast 20-trajectory SIMULATED evaluation suite (< 60s):
+# - 16 trajectories: 4 Incident Scenarios (INC-101..104) x 4 Harness Modes (antigravity, opencode, pi, multi)
+# - 4 LIVE Gemini Flash Fallback Cascade trajectories (3.8 -> 3.7 -> 3.6 -> 3.5)
+# - Repository hygiene, @sha256: manifest contract & /about Architecture Topology Catalog drift check
 make eval
+
+# Run the live GKE 4x4 chaos soak + Google Cloud Logging & Managed Prometheus dual-export verification:
+# - 4 Incident Scenarios x 4 Coding Harnesses on live GKE ateworker-gvisor sandboxes (MaxConcurrency = 1)
+# - Baseline-v1 reset + Prometheus /api/v1/alerts drain between runs
+# - Stage-safe scrubbed JSON report written to /tmp/ax-live-gke-eval-report.json (0600)
+make eval-live-gke
 ```
 
 ### 3. Deploy to GKE (`kubectl config current-context`)
