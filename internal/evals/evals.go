@@ -100,14 +100,14 @@ type SuiteConfig struct {
 
 // SuiteReport summarizes the execution of the full evaluation matrix.
 type SuiteReport struct {
-	TotalTrajectories     int                `json:"total_trajectories"`
-	PassedTrajectories    int                `json:"passed_trajectories"`
-	FailedTrajectories    int                `json:"failed_trajectories"`
-	AllPassed             bool               `json:"all_passed"`
-	ScenarioCoverage      map[string]int     `json:"scenario_coverage"`
-	HarnessCoverage       map[string]int     `json:"harness_coverage"`
-	CascadeModelsVerified map[string]bool    `json:"cascade_models_verified"`
-	Trajectories          []TrajectoryGrade  `json:"trajectories"`
+	TotalTrajectories     int               `json:"total_trajectories"`
+	PassedTrajectories    int               `json:"passed_trajectories"`
+	FailedTrajectories    int               `json:"failed_trajectories"`
+	AllPassed             bool              `json:"all_passed"`
+	ScenarioCoverage      map[string]int    `json:"scenario_coverage"`
+	HarnessCoverage       map[string]int    `json:"harness_coverage"`
+	CascadeModelsVerified map[string]bool   `json:"cascade_models_verified"`
+	Trajectories          []TrajectoryGrade `json:"trajectories"`
 }
 
 // RunEvaluationSuite executes the 4-Scenario x 4-Harness evaluation matrix (plus optional LIVE Gemini Flash
@@ -249,6 +249,7 @@ func forbiddenHygieneTokens() []string {
 		"gke_mofi" + "labs_us-central1-a_ate-cluster",
 		"gke-ate" + "-cluster",
 		"substrate" + "-poc",
+		"/usr/local/google/" + "home/",
 	}
 }
 
@@ -323,7 +324,17 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 		"manifests/monitoring/01-prometheus-alertmanager.yaml",
 		"manifests/monitoring/02-loki-grafana.yaml",
 		"manifests/monitoring/03-gmp-podmonitoring.yaml",
+		"deploy/ax-observer/Dockerfile",
+		"deploy/model-gateway/Dockerfile",
+		"deploy/ax-server/Dockerfile",
+		"deploy/ax-server/build.sh",
+		"harnesses/Dockerfile.task-runner",
+		"harnesses/config/opencode.json",
+		"harnesses/config/pi-models.json",
+		"Dockerfile.polyglot-mesh",
+		"internal/httputil/httputil.go",
 		"internal/observer/about_catalog.go",
+		"services/run-service-tests.sh",
 		"hack/deploy-gke.sh",
 		"hack/run-local.sh",
 		"hack/record-stage-walkthrough.sh",
@@ -430,6 +441,26 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 		"${AX_OBSERVER_SHA256}",
 		"${TASK_RUNNER_SHA256}",
 		"${AX_SERVER_SHA256}",
+		"readinessProbe:",
+		"livenessProbe:",
+		"allowPrivilegeEscalation: false",
+		"resources:",
+		"requests:",
+		"limits:",
+	})
+
+	requireSnippets("manifests/monitoring/01-prometheus-alertmanager.yaml", []string{
+		"readinessProbe:",
+		"livenessProbe:",
+		"allowPrivilegeEscalation: false",
+		"resources:",
+	})
+
+	requireSnippets("manifests/monitoring/02-loki-grafana.yaml", []string{
+		"readinessProbe:",
+		"livenessProbe:",
+		"allowPrivilegeEscalation: false",
+		"resources:",
 	})
 
 	requireSnippets("manifests/monitoring/03-gmp-podmonitoring.yaml", []string{
@@ -480,6 +511,8 @@ func VerifyRepositoryHygieneAndManifests(repoRoot string) (HygieneReport, error)
 	requireSnippets("Makefile", []string{
 		"build:",
 		"test:",
+		"smoke:",
+		"test-e2e:",
 		"eval:",
 		"eval-live-gke:",
 		"run-local:",

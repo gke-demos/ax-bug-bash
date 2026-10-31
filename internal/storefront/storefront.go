@@ -267,7 +267,9 @@ func (rt *Runtime) Handler() http.Handler {
 	})
 	mux.HandleFunc("/api/products", rt.handleProducts)
 	mux.HandleFunc("/api/cart/checkout", rt.handleCheckout)
+	mux.HandleFunc("/api/checkout", rt.handleCheckout)
 	mux.HandleFunc("/api/incidents", rt.handleIncidents)
+	mux.HandleFunc("/api/scenarios", rt.handleIncidents)
 	mux.HandleFunc("/api/incidents/activate", rt.handleActivateIncident)
 	mux.HandleFunc("/api/incidents/randomize", rt.handleRandomizeIncident)
 	mux.HandleFunc("/api/incidents/heal", rt.handleHealIncident)
@@ -324,7 +326,7 @@ func (rt *Runtime) handleActivateIncident(w http.ResponseWriter, r *http.Request
 	var req struct {
 		IncidentID string `json:"incident_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.IncidentID == "" {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil || req.IncidentID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "incident_id is required"})
 		return
 	}
@@ -363,7 +365,7 @@ func (rt *Runtime) handleHealIncident(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		IncidentID string `json:"incident_id"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req)
 	rt.HealIncident(req.IncidentID)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":          "healed",
@@ -404,8 +406,14 @@ func (rt *Runtime) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	reqID := strings.TrimSpace(r.Header.Get("X-Storefront-Request-ID"))
+	if reqID == "" {
+		reqID = fmt.Sprintf("req-%d", time.Now().UTC().UnixNano())
+	}
+	w.Header().Set("X-Storefront-Request-ID", reqID)
+
 	var req CheckoutRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, CheckoutResponse{
 			Status: "INVALID_REQUEST",
 			Error:  "invalid JSON payload",

@@ -21,14 +21,14 @@ for arg in "$@"; do
   esac
 done
 
-KUBE_CONTEXT="${KUBE_CONTEXT:-$(kubectl config current-context 2>/dev/null || echo "gke-default-context")}"
-PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null || echo "example-gcp-project")}"
 REGION="${REGION:-us-central1}"
 AR_REPO="${AR_REPO:-ax-bug-bash}"
-IMAGE_REGISTRY="${IMAGE_REGISTRY:-${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}}"
 TAG="${TAG:-$(git rev-parse --short HEAD 2>/dev/null || echo "v060")}"
 
 if [[ "${DRY_RUN}" == "true" ]]; then
+  KUBE_CONTEXT="${KUBE_CONTEXT:-gke-default-context}"
+  PROJECT_ID="${PROJECT_ID:-example-gcp-project}"
+  IMAGE_REGISTRY="${IMAGE_REGISTRY:-${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}}"
   PROJECT_NUMBER="${PROJECT_NUMBER:-000000000000}"
   AX_SNAPSHOTS_BUCKET="${AX_SNAPSHOTS_BUCKET:-${PROJECT_ID}-ax-snapshots}"
   ATEWORKER_GVISOR_IMAGE="${ATEWORKER_GVISOR_IMAGE:-${IMAGE_REGISTRY}/ateworker-gvisor:v0.6.0}"
@@ -38,6 +38,9 @@ if [[ "${DRY_RUN}" == "true" ]]; then
   TASK_RUNNER_SHA256="4444444444444444444444444444444444444444444444444444444444444444"
   AX_SERVER_SHA256="5555555555555555555555555555555555555555555555555555555555555555"
 else
+  KUBE_CONTEXT="${KUBE_CONTEXT:-$(kubectl config current-context 2>/dev/null || echo "gke-default-context")}"
+  PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null || echo "example-gcp-project")}"
+  IMAGE_REGISTRY="${IMAGE_REGISTRY:-${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}}"
   PROJECT_NUMBER="${PROJECT_NUMBER:-$(gcloud projects list --filter="projectId=${PROJECT_ID}" --format="value(projectNumber)" 2>/dev/null || gcloud projects describe "${PROJECT_ID}" --format="value(projectNumber)" 2>/dev/null || echo "")}"
   if ! gcloud artifacts repositories describe "${AR_REPO}" --location="${REGION}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
     gcloud artifacts repositories create "${AR_REPO}" \

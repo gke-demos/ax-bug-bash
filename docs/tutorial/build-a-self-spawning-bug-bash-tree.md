@@ -2,7 +2,7 @@
 
 This five-lab tutorial walks you through running, extending, and deploying a self-spawning **Bug Bash Tree** on `google/ax` and **Agent Substrate `v0.6.0`** on Google Kubernetes Engine (GKE). By the end of these five labs, you will have run the 5-service polyglot **Retail Storefront** locally in hermetic `SIMULATED` mode, inspected how the in-sandbox Go **Custom Runner** coordinates Red-Green TDD and volume checkpoints, configured the zero-secret **Model Gateway** on **Gemini Enterprise Agent Platform**, deployed the full stack to a live GKE cluster, and verified the sequential `4x4` chaos soak with Google Cloud telemetry dual-export.
 
-For the architectural deep-dive and live GKE benchmark breakdown, read the companion blog post in [`docs/blog/self-spawning-bug-bash-tree-on-google-ax.md`](../blog/self-spawning-bug-bash-tree-on-google-ax.md).
+For the architectural deep-dive and live GKE benchmark breakdown, read the companion blog post in [`docs/blog/self-spawning-bug-bash-tree-on-google-ax.md`](../blog/self-spawning-bug-bash-tree-on-google-ax.md), the three-layer architecture guide in [`docs/architecture/three-layer-substrate-env-ax.md`](../architecture/three-layer-substrate-env-ax.md), the upstream compatibility guide in [`docs/upstream/google-ax-v060-patches.md`](../upstream/google-ax-v060-patches.md), and the live presenter runbook in [`docs/stage-runbook.md`](../stage-runbook.md).
 
 ![Live GKE Bug Bash Tree Terminal Recording](../assets/ax-live-gke-terminal.gif)
 
@@ -106,7 +106,7 @@ Navigate to `http://localhost:3000/about` in your browser to explore the three i
 
 - **Tab 1 (`3-Surface Mesh & Blast-Radius Explorer`)**: Click through `INC-101`..`INC-104` to highlight which microservices are implicated and which unaffected services stay untouched.
 - **Tab 2 (`6-Stage Recursive Task-Tree & TDD Stepper`)**: Step through the 6 lifecycle stages from Alertmanager webhook arrival through **Child Task** `REPRODUCE_RED` and `PATCH_GREEN` to `SuspendTask(SNAPSHOT_FIDELITY_VOLUMES)` and `< 3s` selective hot-reload.
-- **Tab 3 (`Zero-Trust Security, 4-Model Cascade Simulator & 12 ADRs`)**: Simulate upstream `429` and `503` responses across the 4-tier Gemini Flash cascade (`gemini-3.8-flash` -> `gemini-3.7-flash` -> `gemini-3.6-flash` -> `gemini-3.5-flash`) and browse all 12 Architecture Decision Records.
+- **Tab 3 (`Zero-Trust Security, 4-Model Cascade Simulator & 14 ADRs`)**: Simulate upstream `429` and `503` responses across the 4-tier Gemini Flash cascade (`gemini-3.8-flash` -> `gemini-3.7-flash` -> `gemini-3.6-flash` -> `gemini-3.5-flash`) and browse all 14 Architecture Decision Records (`ADR-0001` through `ADR-0014`).
 
 Click the icon-only **Sun / Moon** button in the top-right header to toggle high-contrast **Projector Light Mode**. The theme switch uses pure CSS custom property overrides (`html[data-theme="light"]`) so switching between dark and light modes produces zero layout shift.
 
@@ -371,7 +371,7 @@ kubectl -n ax-bug-bash port-forward svc/storefront-git 3003:8090 >/tmp/pf-git.lo
 kubectl -n monitoring port-forward svc/prometheus 9090:9090 >/tmp/pf-prometheus.log 2>&1 &
 ```
 
-Verify that all local forwarders respond with `HTTP 200`:
+Verify that all local forwarders respond with `HTTP 200` (or run `make stage-ready` via [`hack/stage-warmup.sh`](../../hack/stage-warmup.sh) to manage port-forwards and verify cluster readiness in one command):
 
 ```bash
 curl -fsS http://127.0.0.1:3000/healthz
@@ -387,7 +387,7 @@ Execute the Tier-2 live GKE chaos soak:
 make eval-live-gke
 ```
 
-`make eval-live-gke` runs `TestLiveGKEFourByFourChaosSoakAndDualExport` (`internal/evals/live_gke.go`) with `MaxConcurrency = 1` across four orthogonal `(Incident Scenario, Coding Harness)` pairs on real `ateworker-gvisor` sandboxes:
+`make eval-live-gke` runs `TestLiveGKEFourByFourChaosSoakAndDualExport` (`internal/evals/live_gke_eval.go`) with `MaxConcurrency = 1` across four orthogonal `(Incident Scenario, Coding Harness)` pairs on real `ateworker-gvisor` sandboxes:
 
 1. **`INC-101` x `antigravity`** (`pricing-service` + `shipping-service`)
 2. **`INC-102` x `opencode`** (`inventory-service` + `checkout-service`)

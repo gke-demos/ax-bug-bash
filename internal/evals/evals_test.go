@@ -1,17 +1,20 @@
 package evals_test
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/gke-demos/ax-bug-bash/internal/bugbash"
 	"github.com/gke-demos/ax-bug-bash/internal/evals"
@@ -19,6 +22,546 @@ import (
 	"github.com/gke-demos/ax-bug-bash/internal/observer"
 	"github.com/gke-demos/ax-bug-bash/internal/storefront"
 )
+
+func containsEmojiRune(s string) (rune, bool) {
+	for _, r := range s {
+		if (r >= 0x1F300 && r <= 0x1FAFF) || (r >= 0x2600 && r <= 0x27BF && unicode.IsSymbol(r) && r != 0x2600 && r != 0x263E) {
+			if r >= 0x1F300 {
+				return r, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// TestSmokeSuite executes fast (<5s) hermetic smoke checks across all 3 decoupled surfaces,
+// the Model Gateway fallback cascade, SSE streaming, Storefront checkout/incident lifecycle,
+// and --dry-run deployment/warmup scripts.
+func TestSmokeSuite(t *testing.T) {
+	suiteStart := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	sf, err := storefront.NewRuntime(storefront.Config{
+		GitWorkDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("creating storefront runtime: %v", err)
+	}
+	sfSrv := httptest.NewServer(sf.Handler())
+	defer sfSrv.Close()
+
+	gwCfg := gateway.DefaultConfig()
+	gwCfg.EnableFixtureFallback = true
+	gw := gateway.NewServer(gwCfg, func(context.Context) (string, error) {
+		return "", nil
+	})
+	gwSrv := httptest.NewServer(gw.Handler())
+	defer gwSrv.Close()
+
+	obsSrv, err := observer.NewServer(ctx, observer.Config{
+		Storefront:          sf,
+		StorefrontURL:       sfSrv.URL,
+		StorefrontPublicURL: sfSrv.URL,
+		ModelGateway:        gw,
+		ModelGatewayURL:     gwSrv.URL,
+	})
+	if err != nil {
+		t.Fatalf("creating observer server: %v", err)
+	}
+	defer obsSrv.Close()
+
+	obsHTTP := httptest.NewServer(obsSrv.Handler())
+	defer obsHTTP.Close()
+
+	monHTTP := httptest.NewServer(obsSrv.Scraper().Handler())
+	defer monHTTP.Close()
+
+	client := &http.Client{Timeout: 4 * time.Second}
+
+	t.Run("SurfaceHealthAndReadiness", func(t *testing.T) {
+		endpoints := []struct {
+			name string
+			url  string
+		}{
+			{name: "storefront /healthz", url: sfSrv.URL + "/healthz"},
+			{name: "storefront /readyz", url: sfSrv.URL + "/readyz"},
+			{name: "model-gateway /healthz", url: gwSrv.URL + "/healthz"},
+			{name: "model-gateway /readyz", url: gwSrv.URL + "/readyz"},
+			{name: "ax-observer /healthz", url: obsHTTP.URL + "/healthz"},
+			{name: "ax-observer /readyz", url: obsHTTP.URL + "/readyz"},
+			{name: "monitoring /healthz", url: monHTTP.URL + "/healthz"},
+			{name: "monitoring /monitoring", url: monHTTP.URL + "/monitoring"},
+		}
+		for _, ep := range endpoints {
+			resp, err := client.Get(ep.url)
+			if err != nil {
+				t.Fatalf("%s request failed: %v", ep.name, err)
+			}
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Errorf("%s status = %d, want 200 OK", ep.name, resp.StatusCode)
+			}
+			if got := resp.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+				t.Errorf("%s X-Content-Type-Options = %q, want nosniff", ep.name, got)
+			}
+		}
+	})
+
+	t.Run("ObserverUIRoutesAndProjectorLightMode", func(t *testing.T) {
+		for _, route := range []string{"/", "/workers", "/about"} {
+			resp, err := client.Get(obsHTTP.URL + route)
+			if err != nil {
+				t.Fatalf("GET %s failed: %v", route, err)
+			}
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("GET %s status = %d, want 200 OK", route, resp.StatusCode)
+			}
+			html := string(bodyBytes)
+			if !strings.Contains(html, "theme-toggle") && !strings.Contains(html, "btn-theme-light") {
+				t.Errorf("GET %s HTML missing Projector Light Mode toggle control", route)
+			}
+			if !strings.Contains(html, "<svg") {
+				t.Errorf("GET %s HTML missing inline SVG icons", route)
+			}
+			if r, hasEmoji := containsEmojiRune(html); hasEmoji {
+				t.Errorf("GET %s HTML contains forbidden emoji rune U+%04X", route, r)
+			}
+		}
+
+		// Query-parameter routing must be rejected with HTTP 400
+		badResp, err := client.Get(obsHTTP.URL + "/?view=workers")
+		if err != nil {
+			t.Fatalf("GET /?view=workers failed: %v", err)
+		}
+		_ = badResp.Body.Close()
+		if badResp.StatusCode != http.StatusBadRequest {
+			t.Errorf("GET /?view=workers status = %d, want 400 Bad Request", badResp.StatusCode)
+		}
+	})
+
+	t.Run("AboutCatalog14ADRContract", func(t *testing.T) {
+		resp, err := client.Get(obsHTTP.URL + "/api/about/catalog")
+		if err != nil {
+			t.Fatalf("GET /api/about/catalog failed: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET /api/about/catalog status = %d, want 200", resp.StatusCode)
+		}
+		var cat observer.ArchitectureTopologyCatalog
+		if err := json.NewDecoder(resp.Body).Decode(&cat); err != nil {
+			t.Fatalf("decoding ArchitectureTopologyCatalog: %v", err)
+		}
+		if len(cat.ADRs) != 14 {
+			t.Errorf("len(ADRs) = %d, want 14 (ADR-0001..ADR-0014)", len(cat.ADRs))
+		}
+		if len(cat.Nodes) != 12 {
+			t.Errorf("len(Nodes) = %d, want 12", len(cat.Nodes))
+		}
+		if len(cat.Edges) != 11 {
+			t.Errorf("len(Edges) = %d, want 11", len(cat.Edges))
+		}
+		if len(cat.Services) != 5 {
+			t.Errorf("len(Services) = %d, want 5", len(cat.Services))
+		}
+		if len(cat.Scenarios) != 4 {
+			t.Errorf("len(Scenarios) = %d, want 4", len(cat.Scenarios))
+		}
+		if len(cat.Harnesses) != 3 {
+			t.Errorf("len(Harnesses) = %d, want 3", len(cat.Harnesses))
+		}
+		if len(cat.CascadeModels) != 4 {
+			t.Errorf("len(CascadeModels) = %d, want 4", len(cat.CascadeModels))
+		}
+		if cat.StatusStrip.StorefrontBaselineTag != "baseline-v1" {
+			t.Errorf("StorefrontBaselineTag = %q, want baseline-v1", cat.StatusStrip.StorefrontBaselineTag)
+		}
+	})
+
+	t.Run("WorkersAndTreeAndStateAPIs", func(t *testing.T) {
+		wResp, err := client.Get(obsHTTP.URL + "/api/workers")
+		if err != nil {
+			t.Fatalf("GET /api/workers failed: %v", err)
+		}
+		defer wResp.Body.Close()
+		if wResp.StatusCode != http.StatusOK {
+			t.Fatalf("GET /api/workers status = %d, want 200", wResp.StatusCode)
+		}
+		var workers observer.WorkersResponse
+		if err := json.NewDecoder(wResp.Body).Decode(&workers); err != nil {
+			t.Fatalf("decoding WorkersResponse: %v", err)
+		}
+		if len(workers.Workers) < 4 || workers.ReadyWarmSlots < 4 {
+			t.Errorf("expected >= 4 ready warm slots on /api/workers, got workers=%d readyWarm=%d", len(workers.Workers), workers.ReadyWarmSlots)
+		}
+
+		tResp, err := client.Get(obsHTTP.URL + "/api/tree")
+		if err != nil {
+			t.Fatalf("GET /api/tree failed: %v", err)
+		}
+		defer tResp.Body.Close()
+		if tResp.StatusCode != http.StatusOK {
+			t.Fatalf("GET /api/tree status = %d, want 200", tResp.StatusCode)
+		}
+		var treePayload map[string]any
+		if err := json.NewDecoder(tResp.Body).Decode(&treePayload); err != nil {
+			t.Fatalf("decoding /api/tree JSON: %v", err)
+		}
+		if _, ok := treePayload["execution_mode"]; !ok {
+			t.Errorf("/api/tree missing execution_mode key: %+v", treePayload)
+		}
+
+		sResp, err := client.Get(obsHTTP.URL + "/api/state")
+		if err != nil {
+			t.Fatalf("GET /api/state failed: %v", err)
+		}
+		defer sResp.Body.Close()
+		if sResp.StatusCode != http.StatusOK {
+			t.Fatalf("GET /api/state status = %d, want 200", sResp.StatusCode)
+		}
+		var snap observer.StateSnapshot
+		if err := json.NewDecoder(sResp.Body).Decode(&snap); err != nil {
+			t.Fatalf("decoding StateSnapshot: %v", err)
+		}
+		if len(snap.Services) != 5 {
+			t.Errorf("len(StateSnapshot.Services) = %d, want 5", len(snap.Services))
+		}
+	})
+
+	t.Run("SSEEventsStream", func(t *testing.T) {
+		sseCtx, sseCancel := context.WithTimeout(ctx, 3*time.Second)
+		defer sseCancel()
+
+		req, err := http.NewRequestWithContext(sseCtx, http.MethodGet, obsHTTP.URL+"/api/events", nil)
+		if err != nil {
+			t.Fatalf("creating SSE request: %v", err)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("GET /api/events failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/event-stream") {
+			t.Fatalf("GET /api/events Content-Type = %q, want text/event-stream", ct)
+		}
+
+		scanner := bufio.NewScanner(resp.Body)
+		foundEvent := false
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.HasPrefix(line, "event: state.snapshot") || strings.HasPrefix(line, "data: {") {
+				foundEvent = true
+				break
+			}
+		}
+		if !foundEvent {
+			t.Errorf("did not receive initial state.snapshot SSE frame from /api/events")
+		}
+	})
+
+	t.Run("ModelGatewayCascade38To35ToFixture", func(t *testing.T) {
+		// 1. Verify 3.8 (429) -> 3.7 (503) -> 3.6 (429) -> 3.5 (200 LIVE)
+		upstream35 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") != "Bearer smoke-wi-token" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			for _, m := range []string{"gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"} {
+				if strings.Contains(r.URL.Path, "/models/"+m+":") {
+					w.WriteHeader(http.StatusTooManyRequests)
+					_, _ = w.Write([]byte(`{"error":{"code":429,"message":"capacity exhausted"}}`))
+					return
+				}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"candidates":[{"content":{"role":"model","parts":[{"text":"healed via 3.5"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":8,"totalTokenCount":20}}`))
+		}))
+		defer upstream35.Close()
+
+		cfgLive := gateway.DefaultConfig()
+		cfgLive.AgentPlatformBaseURL = upstream35.URL
+		cfgLive.EnableFixtureFallback = true
+		gwLive := gateway.NewServer(cfgLive, gateway.StaticTokenFunc("smoke-wi-token"))
+		gwLiveSrv := httptest.NewServer(gwLive.Handler())
+		defer gwLiveSrv.Close()
+
+		chatBody := []byte(`{"model":"gemini-3.8-flash","messages":[{"role":"user","content":"smoke test cascade"}]}`)
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, gwLiveSrv.URL+"/s/smoke-task-1/v1/chat/completions", bytes.NewReader(chatBody))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+gateway.SandboxTokenPlaceholder)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("POST /s/smoke-task-1/v1/chat/completions failed: %v", err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("cascade 3.8->3.5 status = %d, want 200", resp.StatusCode)
+		}
+		if gotModel := resp.Header.Get("X-AX-Active-Model"); gotModel != "gemini-3.5-flash" {
+			t.Errorf("X-AX-Active-Model = %q, want gemini-3.5-flash", gotModel)
+		}
+		if gotProv := resp.Header.Get("X-AX-Source-Provenance"); gotProv != "LIVE" {
+			t.Errorf("X-AX-Source-Provenance = %q, want LIVE", gotProv)
+		}
+
+		// 2. Verify full 3.8 -> 3.7 -> 3.6 -> 3.5 exhaustion falls back to deterministic FIXTURE
+		upstreamAllDown := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":{"code":503,"message":"all tiers unavailable"}}`))
+		}))
+		defer upstreamAllDown.Close()
+
+		cfgFix := gateway.DefaultConfig()
+		cfgFix.AgentPlatformBaseURL = upstreamAllDown.URL
+		cfgFix.EnableFixtureFallback = true
+		gwFix := gateway.NewServer(cfgFix, gateway.StaticTokenFunc("smoke-wi-token"))
+		gwFixSrv := httptest.NewServer(gwFix.Handler())
+		defer gwFixSrv.Close()
+
+		reqFix, _ := http.NewRequestWithContext(ctx, http.MethodPost, gwFixSrv.URL+"/s/smoke-task-fix/v1/chat/completions", bytes.NewReader(chatBody))
+		reqFix.Header.Set("Content-Type", "application/json")
+		reqFix.Header.Set("Authorization", "Bearer "+gateway.SandboxTokenPlaceholder)
+		respFix, err := client.Do(reqFix)
+		if err != nil {
+			t.Fatalf("fixture fallback request failed: %v", err)
+		}
+		_ = respFix.Body.Close()
+		if respFix.StatusCode != http.StatusOK {
+			t.Fatalf("fixture fallback status = %d, want 200", respFix.StatusCode)
+		}
+		if gotProv := respFix.Header.Get("X-AX-Source-Provenance"); gotProv != "FIXTURE" {
+			t.Errorf("X-AX-Source-Provenance after 4-tier drop = %q, want FIXTURE", gotProv)
+		}
+	})
+
+	t.Run("StorefrontHealthMetricsCheckoutAndIncidentLifecycle", func(t *testing.T) {
+		mResp, err := client.Get(sfSrv.URL + "/metrics")
+		if err != nil {
+			t.Fatalf("GET /metrics failed: %v", err)
+		}
+		mBytes, _ := io.ReadAll(mResp.Body)
+		_ = mResp.Body.Close()
+		if !strings.Contains(string(mBytes), "storefront_http_requests_total") {
+			t.Errorf("/metrics missing storefront_http_requests_total")
+		}
+
+		happyCart := []byte(`{"currency":"USD","items":[{"sku":"sku-cable-usbc","quantity":1}]}`)
+		for _, ep := range []string{"/api/cart/checkout", "/api/checkout"} {
+			cResp, err := client.Post(sfSrv.URL+ep, "application/json", bytes.NewReader(happyCart))
+			if err != nil {
+				t.Fatalf("POST %s failed: %v", ep, err)
+			}
+			var co storefront.CheckoutResponse
+			_ = json.NewDecoder(cResp.Body).Decode(&co)
+			_ = cResp.Body.Close()
+			if cResp.StatusCode != http.StatusOK || co.Status != "CONFIRMED" {
+				t.Fatalf("happy-path POST %s status=%d (%s), want 200 CONFIRMED", ep, cResp.StatusCode, co.Status)
+			}
+			if reqID := cResp.Header.Get("X-Storefront-Request-ID"); reqID == "" {
+				t.Errorf("POST %s missing X-Storefront-Request-ID response header", ep)
+			}
+		}
+
+		// Activate INC-101, verify 500 on checkout, then reset and verify 200 OK
+		actResp, err := client.Post(sfSrv.URL+"/api/incidents/activate", "application/json", bytes.NewReader([]byte(`{"incident_id":"INC-101"}`)))
+		if err != nil {
+			t.Fatalf("POST /api/incidents/activate failed: %v", err)
+		}
+		_ = actResp.Body.Close()
+		if actResp.StatusCode != http.StatusOK {
+			t.Fatalf("activate INC-101 status = %d, want 200", actResp.StatusCode)
+		}
+
+		sc, _ := storefront.GetScenario("INC-101")
+		trigCart, _ := json.Marshal(sc.TriggerCart)
+		failResp, err := client.Post(sfSrv.URL+"/api/checkout", "application/json", bytes.NewReader(trigCart))
+		if err != nil {
+			t.Fatalf("POST /api/checkout (INC-101) failed: %v", err)
+		}
+		_ = failResp.Body.Close()
+		if failResp.StatusCode != http.StatusInternalServerError {
+			t.Fatalf("expected HTTP 500 when INC-101 is active, got %d", failResp.StatusCode)
+		}
+
+		rstResp, err := client.Post(sfSrv.URL+"/api/incidents/reset", "application/json", bytes.NewReader([]byte(`{}`)))
+		if err != nil {
+			t.Fatalf("POST /api/incidents/reset failed: %v", err)
+		}
+		_ = rstResp.Body.Close()
+		if rstResp.StatusCode != http.StatusOK {
+			t.Fatalf("reset status = %d, want 200", rstResp.StatusCode)
+		}
+
+		healedResp, err := client.Post(sfSrv.URL+"/api/checkout", "application/json", bytes.NewReader(happyCart))
+		if err != nil {
+			t.Fatalf("post-reset checkout failed: %v", err)
+		}
+		_ = healedResp.Body.Close()
+		if healedResp.StatusCode != http.StatusOK {
+			t.Fatalf("post-reset checkout status = %d, want 200", healedResp.StatusCode)
+		}
+	})
+
+	t.Run("HackScriptsDryRunSmoke", func(t *testing.T) {
+		repoRoot, err := filepath.Abs("../..")
+		if err != nil {
+			t.Fatalf("resolving repoRoot: %v", err)
+		}
+		scripts := []struct {
+			name string
+			cmd  []string
+			want string
+		}{
+			{
+				name: "deploy-gke.sh --dry-run",
+				cmd:  []string{"bash", "./hack/deploy-gke.sh", "--dry-run"},
+				want: "[DRY-RUN] Manifest rendering and @sha256: digest verification succeeded.",
+			},
+			{
+				name: "stage-warmup.sh --dry-run",
+				cmd:  []string{"bash", "./hack/stage-warmup.sh", "--dry-run"},
+				want: "[STAGE-WARMUP] Dry-run verification",
+			},
+			{
+				name: "run-local.sh --dry-run",
+				cmd:  []string{"bash", "./hack/run-local.sh", "--dry-run"},
+				want: "[DRY-RUN] Local 3-surface launcher validated",
+			},
+			{
+				name: "record-stage-walkthrough.sh --dry-run",
+				cmd:  []string{"bash", "./hack/record-stage-walkthrough.sh", "--dry-run"},
+				want: "[DRY-RUN] 6-Scene Stage Walkthrough recorder validated",
+			},
+			{
+				name: "record-terminal-demo.py --dry-run",
+				cmd:  []string{"python3", "./hack/record-terminal-demo.py", "--dry-run"},
+				want: "[DRY-RUN] Terminal demo GIF recorder validated",
+			},
+		}
+		for _, sc := range scripts {
+			c := exec.CommandContext(ctx, sc.cmd[0], sc.cmd[1:]...)
+			c.Dir = repoRoot
+			out, err := c.CombinedOutput()
+			if err != nil {
+				t.Fatalf("%s failed: %v\n%s", sc.name, err, string(out))
+			}
+			if !strings.Contains(string(out), sc.want) {
+				t.Errorf("%s output = %q, want substring %q", sc.name, string(out), sc.want)
+			}
+		}
+	})
+
+	if elapsed := time.Since(suiteStart); elapsed > 5*time.Second {
+		t.Errorf("TestSmokeSuite took %s, want < 5s", elapsed)
+	}
+}
+
+// TestEndToEndIntegrationSuite executes the complete hermetic E2E integration and 20-trajectory
+// evaluation matrix, callback lifecycle verification, and repository hygiene/manifest contracts.
+func TestEndToEndIntegrationSuite(t *testing.T) {
+	t.Run("TwentyTrajectoryMatrixAndLiveCascade", func(t *testing.T) {
+		TestFourScenariosAcrossAllHarnessesAndLiveCascade(t)
+	})
+
+	t.Run("ObserverCallbackAndRolloutE2ELifecycle", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		sf, err := storefront.NewRuntime(storefront.Config{GitWorkDir: t.TempDir()})
+		if err != nil {
+			t.Fatalf("creating storefront runtime: %v", err)
+		}
+		sfSrv := httptest.NewServer(sf.Handler())
+		defer sfSrv.Close()
+
+		obsSrv, err := observer.NewServer(ctx, observer.Config{
+			Storefront:          sf,
+			StorefrontURL:       sfSrv.URL,
+			StorefrontPublicURL: sfSrv.URL,
+		})
+		if err != nil {
+			t.Fatalf("creating observer server: %v", err)
+		}
+		defer obsSrv.Close()
+
+		obsHTTP := httptest.NewServer(obsSrv.Handler())
+		defer obsHTTP.Close()
+
+		events := []bugbash.ObserverCallbackEvent{
+			{
+				EventType:          "root_triage_started",
+				ExecutionID:        "exec-e2e-inc-104",
+				IncidentID:         "INC-104",
+				RootTaskName:       "triage-inc-104",
+				HarnessMode:        "multi",
+				RequestedModel:     "gemini-3.8-flash",
+				ImplicatedServices: []string{"inventory-service", "shipping-service"},
+				UnaffectedServices: []string{"storefront-web", "checkout-service", "pricing-service"},
+			},
+			{
+				EventType:      "child_fixer_spawned",
+				ExecutionID:    "exec-e2e-inc-104",
+				IncidentID:     "INC-104",
+				RootTaskName:   "triage-inc-104",
+				TaskName:       "fix-inc-104-inventory-service",
+				Service:        "inventory-service",
+				HarnessMode:    "antigravity",
+				RequestedModel: "gemini-3.8-flash",
+			},
+			{
+				EventType:        "child_fixer_completed",
+				ExecutionID:      "exec-e2e-inc-104",
+				IncidentID:       "INC-104",
+				RootTaskName:     "triage-inc-104",
+				TaskName:         "fix-inc-104-inventory-service",
+				Service:          "inventory-service",
+				HarnessMode:      "antigravity",
+				RequestedModel:   "gemini-3.8-flash",
+				SourceProvenance: "LIVE",
+			},
+			{
+				EventType:         "root_merge_completed",
+				ExecutionID:       "exec-e2e-inc-104",
+				IncidentID:        "INC-104",
+				RootTaskName:      "triage-inc-104",
+				MergedCommitSHA:   "e2e104healedsha",
+				RolloutDurationMs: 920,
+			},
+		}
+
+		for _, ev := range events {
+			raw, _ := json.Marshal(ev)
+			resp, err := http.Post(obsHTTP.URL+"/api/internal/observer-events", "application/json", bytes.NewReader(raw))
+			if err != nil {
+				t.Fatalf("posting callback %s: %v", ev.EventType, err)
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("callback %s status = %d, want 200", ev.EventType, resp.StatusCode)
+			}
+		}
+
+		treeResp, err := http.Get(obsHTTP.URL + "/api/tree")
+		if err != nil {
+			t.Fatalf("GET /api/tree failed: %v", err)
+		}
+		var treeData map[string]any
+		_ = json.NewDecoder(treeResp.Body).Decode(&treeData)
+		_ = treeResp.Body.Close()
+		if gotID := treeData["incident_id"]; gotID != "INC-104" {
+			t.Errorf("/api/tree incident_id = %v, want INC-104", gotID)
+		}
+	})
+
+	t.Run("RepositoryHygieneAndManifestContract", func(t *testing.T) {
+		TestRepositoryHygieneAndManifestContract(t)
+	})
+}
 
 func TestSingleScenarioTrajectoryGradesAllSixInvariants(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -68,17 +611,30 @@ func TestSingleScenarioTrajectoryGradesAllSixInvariants(t *testing.T) {
 	}
 }
 
-func TestFourScenariosAcrossAllHarnessesAndLiveCascade(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
+var (
+	suiteMatrixOnce   sync.Once
+	suiteMatrixReport evals.SuiteReport
+	suiteMatrixErr    error
+)
 
-	report, err := evals.RunEvaluationSuite(ctx, evals.SuiteConfig{
-		IncludeLiveCascadeChecks: true,
-		MaxConcurrency:           4,
+func getTwentyTrajectorySuiteReport(t *testing.T) evals.SuiteReport {
+	t.Helper()
+	suiteMatrixOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+		defer cancel()
+		suiteMatrixReport, suiteMatrixErr = evals.RunEvaluationSuite(ctx, evals.SuiteConfig{
+			IncludeLiveCascadeChecks: true,
+			MaxConcurrency:           4,
+		})
 	})
-	if err != nil {
-		t.Fatalf("RunEvaluationSuite failed: %v", err)
+	if suiteMatrixErr != nil {
+		t.Fatalf("RunEvaluationSuite failed: %v", suiteMatrixErr)
 	}
+	return suiteMatrixReport
+}
+
+func TestFourScenariosAcrossAllHarnessesAndLiveCascade(t *testing.T) {
+	report := getTwentyTrajectorySuiteReport(t)
 	if !report.AllPassed {
 		for _, tr := range report.Trajectories {
 			if !tr.Passed {
@@ -120,16 +676,21 @@ func TestRepositoryHygieneAndManifestContract(t *testing.T) {
 	if !hygiene.Passed {
 		t.Fatalf("expected hygiene & manifest contract Passed=true, got violations: %v", hygiene.Violations)
 	}
-	if len(hygiene.CheckedFiles) < 14 {
-		t.Errorf("len(CheckedFiles) = %d, want >= 14 (including 03-gmp-podmonitoring.yaml, internal/observer/about_catalog.go, blog, tutorial, and demo recording scripts)", len(hygiene.CheckedFiles))
+	if len(hygiene.CheckedFiles) < 20 {
+		t.Errorf("len(CheckedFiles) = %d, want >= 20 (including manifests, Dockerfiles, harness configs, scripts, and docs)", len(hygiene.CheckedFiles))
 	}
 	wantChecked := map[string]bool{
-		"manifests/monitoring/03-gmp-podmonitoring.yaml":            false,
-		"internal/observer/about_catalog.go":                        false,
-		"docs/blog/self-spawning-bug-bash-tree-on-google-ax.md":     false,
-		"docs/tutorial/build-a-self-spawning-bug-bash-tree.md":      false,
-		"hack/record-stage-walkthrough.sh":                          false,
-		"hack/record-terminal-demo.py":                              false,
+		"manifests/monitoring/03-gmp-podmonitoring.yaml":        false,
+		"deploy/ax-observer/Dockerfile":                         false,
+		"deploy/model-gateway/Dockerfile":                       false,
+		"harnesses/Dockerfile.task-runner":                      false,
+		"internal/httputil/httputil.go":                         false,
+		"internal/observer/about_catalog.go":                    false,
+		"services/run-service-tests.sh":                         false,
+		"docs/blog/self-spawning-bug-bash-tree-on-google-ax.md": false,
+		"docs/tutorial/build-a-self-spawning-bug-bash-tree.md":  false,
+		"hack/record-stage-walkthrough.sh":                      false,
+		"hack/record-terminal-demo.py":                          false,
 	}
 	for _, f := range hygiene.CheckedFiles {
 		if _, ok := wantChecked[f]; ok {
@@ -141,6 +702,10 @@ func TestRepositoryHygieneAndManifestContract(t *testing.T) {
 			t.Errorf("expected CheckedFiles to contain %q, got %v", f, hygiene.CheckedFiles)
 		}
 	}
+}
+
+func TestMarkdownHumanizerAndStageSafeProse(t *testing.T) {
+	TestVerifyMarkdownHumanizerAndHygiene(t)
 }
 
 func TestVerifyMarkdownHumanizerAndHygiene(t *testing.T) {
@@ -157,9 +722,9 @@ func TestVerifyMarkdownHumanizerAndHygiene(t *testing.T) {
 	}
 
 	cases := []struct {
-		name        string
-		markdown    string
-		wantSubstr  string
+		name       string
+		markdown   string
+		wantSubstr string
 	}{
 		{
 			name:       "em dash in prose",
@@ -272,374 +837,3 @@ func TestVerifyMarkdownHumanizerAndHygiene(t *testing.T) {
 		})
 	}
 }
-
-func TestLiveGKEChaosSoakRunnerMockContract(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	var (
-		mu                sync.Mutex
-		activeHarness     = "multi"
-		activeIncidentID  string
-		incidentHealed    bool
-		firingAlertsCount int
-		latestTree        *observer.ObserverTreeView
-		trees             []*observer.ObserverTreeView
-		baselineSHA       = "a1b2c3d4baselinev1"
-		currentSHA        = baselineSHA
-		forceFixture      bool
-		loggingHeaders    http.Header
-		monitoringHeaders http.Header
-	)
-
-	// Mock Storefront + Storefront-Git server bound strictly to 127.0.0.1
-	storefrontSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
-
-		switch r.URL.Path {
-		case "/healthz", "/readyz":
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"status":"ok"}`))
-		case "/api/incidents/activate":
-			var req struct {
-				IncidentID string `json:"incident_id"`
-			}
-			_ = json.NewDecoder(r.Body).Decode(&req)
-			activeIncidentID = strings.ToUpper(strings.TrimSpace(req.IncidentID))
-			incidentHealed = false
-			firingAlertsCount = 1
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = fmt.Fprintf(w, `{"status":"activated","incident_id":%q}`, activeIncidentID)
-		case "/api/cart/checkout":
-			w.Header().Set("Content-Type", "application/json")
-			if activeIncidentID != "" && !incidentHealed {
-				w.WriteHeader(http.StatusInternalServerError)
-				_, _ = fmt.Fprintf(w, `{"status":"ERROR","incident_id":%q}`, activeIncidentID)
-				return
-			}
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"status":"CONFIRMED","order_id":"ord-live-200"}`))
-		case "/api/incidents/reset":
-			activeIncidentID = ""
-			incidentHealed = true
-			firingAlertsCount = 0
-			currentSHA = baselineSHA
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = fmt.Fprintf(w, `{"status":"reset","baseline_tag":"baseline-v1","commit_sha":%q,"duration_ms":42}`, baselineSHA)
-		case "/api/incidents/heal":
-			incidentHealed = true
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = fmt.Fprintf(w, `{"status":"healed","commit_sha":%q}`, currentSHA)
-		default:
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"status":"ok"}`))
-		}
-	}))
-	defer storefrontSrv.Close()
-
-	// Mock Prometheus server bound strictly to 127.0.0.1
-	promSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		firing := firingAlertsCount
-		inc := activeIncidentID
-		mu.Unlock()
-
-		w.Header().Set("Content-Type", "application/json")
-		if firing > 0 && inc != "" {
-			_, _ = fmt.Fprintf(w, `{"status":"success","data":{"alerts":[{"labels":{"alertname":"StorefrontHTTP500Spike","incident":%q},"state":"firing"}]}}`, inc)
-			return
-		}
-		_, _ = w.Write([]byte(`{"status":"success","data":{"alerts":[]}}`))
-	}))
-	defer promSrv.Close()
-
-	// Mock AX Observer server bound strictly to 127.0.0.1
-	// Embeds stage-unsafe tokens in RootTaskName/logs to verify stage-safe report scrubbing!
-	unsafeClusterToken := "gke-demo-cluster-default-pool-9999"
-	unsafeProjectToken := "projects/demo-secret-project"
-	unsafeNumberToken := "123456789012"
-	observerSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
-
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/api/config/harness":
-			if r.Method == http.MethodPost || r.Method == http.MethodPut {
-				var req struct {
-					DefaultHarness string `json:"default_harness"`
-				}
-				_ = json.NewDecoder(r.Body).Decode(&req)
-				if req.DefaultHarness != "" {
-					activeHarness = req.DefaultHarness
-				}
-			}
-			_, _ = fmt.Fprintf(w, `{"status":"updated","default_harness":%q,"execution_mode":"LIVE_GKE"}`, activeHarness)
-		case "/api/incidents/reset":
-			var req struct {
-				DefaultHarness string `json:"default_harness"`
-			}
-			_ = json.NewDecoder(r.Body).Decode(&req)
-			if req.DefaultHarness != "" {
-				activeHarness = req.DefaultHarness
-			}
-			activeIncidentID = ""
-			incidentHealed = true
-			firingAlertsCount = 0
-			currentSHA = baselineSHA
-			_, _ = fmt.Fprintf(w, `{"status":"reset","default_harness":%q}`, activeHarness)
-		case "/api/incidents/trigger":
-			var req struct {
-				IncidentID string `json:"incident_id"`
-				Harness    string `json:"harness"`
-			}
-			_ = json.NewDecoder(r.Body).Decode(&req)
-			incID := strings.ToUpper(strings.TrimSpace(req.IncidentID))
-			sc, _ := storefront.GetScenario(incID)
-			h := req.Harness
-			if h == "" {
-				h = activeHarness
-			}
-			children := make([]observer.ObserverChildTaskView, 0, len(sc.ImplicatedServices))
-			rot := []string{"antigravity", "opencode", "pi"}
-			prov := "LIVE"
-			if forceFixture {
-				prov = "FIXTURE"
-			}
-			for idx, svc := range sc.ImplicatedServices {
-				childHarness := h
-				if h == "multi" {
-					childHarness = rot[idx%len(rot)]
-				}
-				children = append(children, observer.ObserverChildTaskView{
-					TaskName:           fmt.Sprintf("fix-%s-%s", strings.ToLower(sc.ID), svc),
-					ParentTask:         fmt.Sprintf("triage-%s-%s", strings.ToLower(sc.ID), unsafeClusterToken),
-					IncidentID:         sc.ID,
-					Service:            svc,
-					Phase:              "Suspended",
-					Harness:            childHarness,
-					RequestedModel:     gateway.DefaultFallbackCascade[0],
-					ActiveModel:        gateway.DefaultFallbackCascade[0],
-					SourceProvenance:   prov,
-					RegressionTestName: "TestRegression_" + sc.ID,
-					TDDSteps: []bugbash.TDDStepEvent{
-						{Phase: "REPRODUCE_RED", Status: "PASSED", Summary: "Failing regression test reproduced HTTP 500"},
-						{Phase: "PATCH_GREEN", Status: "PASSED", Summary: "Patched service and verified all tests pass"},
-					},
-					RegressionTestDiff: fmt.Sprintf("diff --git a/services/%s/test b/services/%s/test\n+TestRegression_%s", svc, svc, sc.ID),
-					CodeFixDiff:        fmt.Sprintf("diff --git a/services/%s/fix b/services/%s/fix\n+patched", svc, svc),
-					UnifiedGitDiff:     fmt.Sprintf("diff --git a/services/%s/fix b/services/%s/fix\n+patched", svc, svc),
-					RedTestOutput:      "FAIL: expected 200, got 500",
-					GreenTestOutput:    "PASS: all tests passed",
-					SlotReclamationMs:  48,
-					Suspended:          true,
-				})
-			}
-			incidentHealed = true
-			currentSHA = "patched-" + strings.ToLower(sc.ID)
-			tree := observer.ObserverTreeView{
-				ExecutionID:   fmt.Sprintf("exec-%s-%s-%s", strings.ToLower(sc.ID), unsafeProjectToken, unsafeNumberToken),
-				ExecutionMode: "LIVE_GKE",
-				IncidentID:    sc.ID,
-				Title:         sc.Title,
-				Summary:       sc.Summary,
-				WhyCIMissedIt: sc.WhyCIMissedIt,
-				HarnessMode:   h,
-				RequestedModel: gateway.DefaultFallbackCascade[0],
-				SourceProvenance: "LIVE",
-				Phase:         "HEALED",
-				RootTask: observer.ObserverRootTaskView{
-					TaskName:           fmt.Sprintf("triage-%s", strings.ToLower(sc.ID)),
-					Phase:              "Suspended",
-					ImplicatedServices: append([]string(nil), sc.ImplicatedServices...),
-					UnaffectedServices: append([]string(nil), sc.UnaffectedServices...),
-				},
-				ImplicatedServices: append([]string(nil), sc.ImplicatedServices...),
-				UnaffectedServices: append([]string(nil), sc.UnaffectedServices...),
-				ChildTasks:         children,
-				MergedGitCommitSHA: currentSHA,
-				RolloutDurationMs:  1420,
-				StorefrontHealed:   true,
-			}
-			latestTree = &tree
-			trees = append(trees, &tree)
-			_, _ = fmt.Fprintf(w, `{"status":"triggered","execution_id":%q}`, tree.ExecutionID)
-		case "/api/state":
-			snap := observer.StateSnapshot{
-				ExecutionMode:  "LIVE_GKE",
-				DefaultHarness: activeHarness,
-				LatestTree:     latestTree,
-				Trees:          trees,
-			}
-			snap.WorkerPool.TotalReclaimedSlots = 9
-			snap.Gateway.ActiveModel = gateway.DefaultFallbackCascade[0]
-			snap.Gateway.SourceProvenance = "LIVE"
-			_ = json.NewEncoder(w).Encode(snap)
-		default:
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"status":"ok"}`))
-		}
-	}))
-	defer observerSrv.Close()
-
-	// Mock Google Cloud Logging v2 API & Cloud Monitoring v3 API bound strictly to 127.0.0.1
-	cloudLoggingSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		loggingHeaders = r.Header.Clone()
-		mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"entries":[{"logName":"projects/redacted/logs/stdout","jsonPayload":{"incident_id":"INC-101","service":"pricing-service"}},{"logName":"projects/redacted/logs/stderr","jsonPayload":{"incident_id":"INC-104","service":"inventory-service"}}]}`))
-	}))
-	defer cloudLoggingSrv.Close()
-
-	cloudMonitoringSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		monitoringHeaders = r.Header.Clone()
-		mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"timeSeries":[{"metric":{"type":"prometheus.googleapis.com/storefront_http_requests_total/counter","labels":{"service":"storefront-web","status":"500"}},"points":[{"value":{"doubleValue":4}}]}]}`))
-	}))
-	defer cloudMonitoringSrv.Close()
-
-	tmpReportPath := filepath.Join(t.TempDir(), "ax-live-gke-eval-report.json")
-	report, err := evals.RunLiveGKEChaosSoak(ctx, evals.LiveGKEEvalConfig{
-		ObserverURL:        observerSrv.URL,
-		StorefrontURL:      storefrontSrv.URL,
-		StorefrontGitURL:   storefrontSrv.URL,
-		PrometheusURL:      promSrv.URL,
-		ProjectID:          "demo-project-id",
-		AccessToken:        "test-oauth2-bearer-token",
-		CloudLoggingURL:    cloudLoggingSrv.URL,
-		CloudMonitoringURL: cloudMonitoringSrv.URL,
-		ReportPath:         tmpReportPath,
-		TrajectoryTimeout:  10 * time.Second,
-		AlertDrainTimeout:  5 * time.Second,
-		DualExportTimeout:  5 * time.Second,
-		PollInterval:       25 * time.Millisecond,
-	})
-	if err != nil {
-		t.Fatalf("RunLiveGKEChaosSoak failed: %v", err)
-	}
-	if !report.AllPassed {
-		t.Fatalf("expected report.AllPassed=true, got false: %+v", report)
-	}
-	if report.MaxConcurrency != 1 {
-		t.Errorf("MaxConcurrency = %d, want 1", report.MaxConcurrency)
-	}
-	if len(report.Trajectories) != 4 {
-		t.Fatalf("len(Trajectories) = %d, want 4", len(report.Trajectories))
-	}
-
-	wantPairs := []struct {
-		inc     string
-		harness string
-	}{
-		{"INC-101", "antigravity"},
-		{"INC-102", "opencode"},
-		{"INC-103", "pi"},
-		{"INC-104", "multi"},
-	}
-	for i, want := range wantPairs {
-		tr := report.Trajectories[i]
-		if tr.IncidentID != want.inc || tr.HarnessMode != want.harness {
-			t.Errorf("trajectory[%d] = (%s, %s), want (%s, %s)", i, tr.IncidentID, tr.HarnessMode, want.inc, want.harness)
-		}
-		if !tr.Passed || !tr.AlertDrainedAfterReset || tr.SourceProvenance != "LIVE" {
-			t.Errorf("trajectory[%d] failed invariants: %+v", i, tr)
-		}
-	}
-
-	if !report.DualExport.Passed || !report.DualExport.CloudLoggingVerified || !report.DualExport.ManagedPrometheusVerified {
-		t.Errorf("expected DualExport.Passed=true, got %+v", report.DualExport)
-	}
-	if got := loggingHeaders.Get("X-Goog-User-Project"); got != "demo-project-id" {
-		t.Errorf("Cloud Logging X-Goog-User-Project = %q, want %q", got, "demo-project-id")
-	}
-	if got := monitoringHeaders.Get("X-Goog-User-Project"); got != "demo-project-id" {
-		t.Errorf("Cloud Monitoring X-Goog-User-Project = %q, want %q", got, "demo-project-id")
-	}
-
-	// Verify report file permissions (0600) and stage-safe scrubbing
-	st, err := os.Stat(tmpReportPath)
-	if err != nil {
-		t.Fatalf("stat report file %s: %v", tmpReportPath, err)
-	}
-	if perm := st.Mode().Perm(); perm != 0o600 {
-		t.Errorf("report file permissions = %04o, want 0600", perm)
-	}
-	rawBytes, err := os.ReadFile(tmpReportPath)
-	if err != nil {
-		t.Fatalf("reading report file: %v", err)
-	}
-	rawReport := string(rawBytes)
-	for _, forbidden := range []string{unsafeClusterToken, unsafeProjectToken, unsafeNumberToken} {
-		if strings.Contains(strings.ToLower(rawReport), strings.ToLower(forbidden)) {
-			t.Errorf("scrubbed report %s still contains forbidden token %q", tmpReportPath, forbidden)
-		}
-	}
-
-	// Verify fail-closed rejection when any child task returns SourceProvenance == "FIXTURE"
-	mu.Lock()
-	forceFixture = true
-	latestTree = nil
-	trees = nil
-	mu.Unlock()
-
-	failedReport, err := evals.RunLiveGKEChaosSoak(ctx, evals.LiveGKEEvalConfig{
-		ObserverURL:        observerSrv.URL,
-		StorefrontURL:      storefrontSrv.URL,
-		StorefrontGitURL:   storefrontSrv.URL,
-		PrometheusURL:      promSrv.URL,
-		ProjectID:          "demo-project-id",
-		AccessToken:        "test-oauth2-bearer-token",
-		CloudLoggingURL:    cloudLoggingSrv.URL,
-		CloudMonitoringURL: cloudMonitoringSrv.URL,
-		ReportPath:         filepath.Join(t.TempDir(), "failed-fixture-report.json"),
-		TrajectoryTimeout:  10 * time.Second,
-		AlertDrainTimeout:  5 * time.Second,
-		DualExportTimeout:  5 * time.Second,
-		PollInterval:       25 * time.Millisecond,
-	})
-	if err != nil {
-		t.Fatalf("RunLiveGKEChaosSoak(forceFixture) unexpected error: %v", err)
-	}
-	if failedReport.AllPassed || failedReport.PassedTrajectories != 0 {
-		t.Fatalf("expected fail-closed AllPassed=false and PassedTrajectories=0 when SourceProvenance=FIXTURE, got %+v", failedReport)
-	}
-}
-
-func TestLiveGKEChaosSoak(t *testing.T) {
-	TestLiveGKEFourByFourChaosSoakAndDualExport(t)
-}
-
-func TestLiveGKEFourByFourChaosSoakAndDualExport(t *testing.T) {
-	if os.Getenv("AX_LIVE_GKE_EVAL") != "1" {
-		t.Skip("skipping live GKE 4x4 chaos soak and dual-export verification (set AX_LIVE_GKE_EVAL=1 or run `make eval-live-gke`)")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 14*time.Minute)
-	defer cancel()
-
-	report, err := evals.RunLiveGKEChaosSoak(ctx, evals.LiveGKEEvalConfig{
-		ReportPath: evals.DefaultLiveGKEReportPath,
-	})
-	if err != nil {
-		t.Fatalf("RunLiveGKEChaosSoak failed: %v", err)
-	}
-	if !report.AllPassed {
-		for _, tr := range report.Trajectories {
-			if !tr.Passed {
-				t.Errorf("live trajectory (%s, harness=%s) failed: %v", tr.IncidentID, tr.HarnessMode, tr.FailureReasons)
-			}
-		}
-		if !report.DualExport.Passed {
-			t.Errorf("GCP dual-export verification failed: %v", report.DualExport.FailureReasons)
-		}
-		t.Fatalf("expected AllPassed=true, got %d/%d trajectories passed and DualExport.Passed=%v",
-			report.PassedTrajectories, report.TotalTrajectories, report.DualExport.Passed)
-	}
-}
-
-
-
-

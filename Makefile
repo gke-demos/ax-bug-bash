@@ -1,4 +1,4 @@
-.PHONY: build test eval eval-live-gke run-local images deploy verify-manifests stage-ready record-demo clean
+.PHONY: build test smoke test-e2e eval eval-live-gke run-local images deploy verify-manifests stage-ready record-demo clean
 
 KUBE_CONTEXT ?= $(shell kubectl config current-context 2>/dev/null || echo "gke-default-context")
 PROJECT_ID   ?= $(shell gcloud config get-value project 2>/dev/null || echo "example-gcp-project")
@@ -18,6 +18,14 @@ build:
 test:
 	go test -p 1 -v ./...
 	bash services/run-service-tests.sh --all
+
+smoke:
+	./hack/deploy-gke.sh --dry-run
+	./hack/stage-warmup.sh --dry-run
+	go test -race -p 1 -v -count=1 -timeout=30s -run TestSmokeSuite ./internal/evals/...
+
+test-e2e:
+	go test -race -p 1 -v -count=1 -timeout=5m -run "TestEndToEndIntegrationSuite|TestSingleScenarioTrajectoryGradesAllSixInvariants|TestFourScenariosAcrossAllHarnessesAndLiveCascade|TestLiveGKEChaosSoakRunnerMockContract|TestRepositoryHygieneAndManifestContract" ./internal/evals/...
 
 eval:
 	go test -p 1 -v -count=1 ./internal/evals/...

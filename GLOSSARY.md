@@ -25,7 +25,7 @@ The zero-secret in-cluster proxy authenticating to Gemini Enterprise Agent Platf
 _Avoid_: Key injector, external LLM proxy.
 
 **Incident Scenario**:
-A reproducible, subtle production failure mode across one or more microservices—uncovered by existing unit or integration tests—that can be activated on demand or randomly to trigger real HTTP 500 errors and monitoring alerts.
+A reproducible, subtle production failure mode across one or more microservices, uncovered by existing unit or integration tests, that can be activated on demand or randomly to trigger real HTTP 500 errors and monitoring alerts.
 _Avoid_: Mock error, fake test failure, static fixture.
 
 **Regression Test**:

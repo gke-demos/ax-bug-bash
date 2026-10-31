@@ -863,8 +863,3 @@ func TestGeminiCascadeFallsBackOn401And403AndRemoteSessionClientQueriesGateway(t
 		t.Errorf("expected nonexistent-task found=false")
 	}
 }
-
-
-
-
-

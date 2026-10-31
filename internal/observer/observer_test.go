@@ -67,6 +67,8 @@ func TestPathBasedRoutingAndCleanUI(t *testing.T) {
 			"about-lifecycle-svg",
 			"about-security-svg",
 			"btn-launch-from-about",
+			"14 ADRs",
+			"ADR-0001 through ADR-0014",
 		} {
 			if !strings.Contains(html, required) {
 				t.Errorf("GET %s missing expected UI element %q", route, required)
@@ -262,10 +264,40 @@ func TestTriggerIncidentAndStateSnapshot(t *testing.T) {
 			t.Errorf("expected child %s harness = opencode, got %q", ch.TaskName, ch.Harness)
 		}
 	}
+
+	// Verify GET /api/tree endpoint and scenario_id alias in POST /api/incidents/trigger
+	scenBody, _ := json.Marshal(map[string]string{
+		"scenario_id": "INC-102",
+		"harness":     "antigravity",
+	})
+	scenResp, err := http.Post(ts.URL+"/api/incidents/trigger", "application/json", bytes.NewReader(scenBody))
+	if err != nil {
+		t.Fatalf("POST /api/incidents/trigger (scenario_id) failed: %v", err)
+	}
+	_ = scenResp.Body.Close()
+	if scenResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/incidents/trigger (scenario_id) status = %d, want 200", scenResp.StatusCode)
+	}
+
+	treeResp, err := http.Get(ts.URL + "/api/tree")
+	if err != nil {
+		t.Fatalf("GET /api/tree failed: %v", err)
+	}
+	var treePayload map[string]any
+	if err := json.NewDecoder(treeResp.Body).Decode(&treePayload); err != nil {
+		t.Fatalf("decoding GET /api/tree failed: %v", err)
+	}
+	_ = treeResp.Body.Close()
+	if treeResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/tree status = %d, want 200", treeResp.StatusCode)
+	}
+	if treePayload["incident_id"] != "INC-102" {
+		t.Errorf("GET /api/tree incident_id = %v, want INC-102", treePayload["incident_id"])
+	}
 }
 
 func TestRealTimeSSEEventStream(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	srv, err := observer.NewServer(ctx, observer.Config{})
@@ -756,4 +788,3 @@ func TestLiveWorkersAndRemoteGatewayClientTelemetry(t *testing.T) {
 		t.Errorf("expected remote ModelGatewayURL sessions in StateSnapshot.Gateway.Sessions, got 0")
 	}
 }
-

@@ -173,6 +173,7 @@ type StateSnapshot struct {
 // TriggerIncidentRequest is the payload sent to POST /api/incidents/trigger from the ⌘K modal.
 type TriggerIncidentRequest struct {
 	IncidentID string `json:"incident_id"`
+	ScenarioID string `json:"scenario_id,omitempty"`
 	Harness    string `json:"harness"`
 	Model      string `json:"model,omitempty"`
 }
@@ -257,7 +258,10 @@ func NewServer(ctx context.Context, cfg Config) (*Server, error) {
 			return nil, fmt.Errorf("starting embedded model-gateway listener: %w", err)
 		}
 		embeddedGWLis = lis
-		embeddedGWSrv = &http.Server{Handler: gw.Handler()}
+		embeddedGWSrv = &http.Server{
+			Handler:           gw.Handler(),
+			ReadHeaderTimeout: 5 * time.Second,
+		}
 		go func() {
 			_ = embeddedGWSrv.Serve(lis)
 		}()
@@ -462,6 +466,7 @@ func (s *Server) Handler() http.Handler {
 	})
 
 	mux.HandleFunc("/api/state", s.handleGetState)
+	mux.HandleFunc("/api/tree", s.handleGetTree)
 	mux.HandleFunc("/api/workers", s.handleGetWorkers)
 	mux.HandleFunc("/api/about/catalog", s.handleGetAboutCatalog)
 	mux.HandleFunc("/api/config/harness", s.handleConfigHarness)
@@ -516,12 +521,41 @@ func (s *Server) handleSPAIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetState(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	snap := s.BuildStateSnapshot(r.Context())
 	httputil.WriteJSON(w, http.StatusOK, snap)
+}
+
+func (s *Server) handleGetTree(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	snap := s.BuildStateSnapshot(r.Context())
+	payload := map[string]any{
+		"execution_mode":   snap.ExecutionMode,
+		"default_harness":  snap.DefaultHarness,
+		"latest_tree":      snap.LatestTree,
+		"trees":            snap.Trees,
+		"worker_pool":      snap.WorkerPool,
+		"volume_snapshots": snap.VolumeSnapshots,
+		"latest_rollout":   snap.LatestRollout,
+		"timestamp":        snap.Timestamp,
+	}
+	if snap.LatestTree != nil {
+		payload["execution_id"] = snap.LatestTree.ExecutionID
+		payload["incident_id"] = snap.LatestTree.IncidentID
+		payload["phase"] = snap.LatestTree.Phase
+		payload["root_task"] = snap.LatestTree.RootTask
+		payload["child_tasks"] = snap.LatestTree.ChildTasks
+		payload["implicated_services"] = snap.LatestTree.ImplicatedServices
+		payload["unaffected_services"] = snap.LatestTree.UnaffectedServices
+		payload["storefront_healed"] = snap.LatestTree.StorefrontHealed
+	}
+	httputil.WriteJSON(w, http.StatusOK, payload)
 }
 
 func (s *Server) handleGetWorkers(w http.ResponseWriter, r *http.Request) {
@@ -607,7 +641,7 @@ func (s *Server) handleConfigHarness(w http.ResponseWriter, r *http.Request) {
 			DefaultHarness string `json:"default_harness"`
 			Harness        string `json:"harness"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
 			httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
 			return
 		}
@@ -637,7 +671,7 @@ func (s *Server) handleAlertmanagerWebhook(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var payload monitoring.AlertmanagerWebhookPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&payload); err != nil {
 		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid Alertmanager v4 JSON payload"})
 		return
 	}
@@ -712,12 +746,12 @@ func (s *Server) handleTriggerIncident(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req TriggerIncidentRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
 		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON request"})
 		return
 	}
 
-	incID := strings.ToUpper(strings.TrimSpace(req.IncidentID))
+	incID := strings.ToUpper(strings.TrimSpace(firstNonEmptyStr(req.IncidentID, req.ScenarioID)))
 	if incID == "" || incID == "RANDOM" {
 		if s.storefront != nil {
 			sc, err := s.storefront.RandomizeIncident()

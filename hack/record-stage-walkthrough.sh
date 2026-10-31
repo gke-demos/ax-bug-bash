@@ -49,7 +49,12 @@ cleanup() {
     fi
   done
 }
-trap cleanup EXIT
+if [[ "${1:-}" == "--dry-run" ]]; then
+  echo "==> [DRY-RUN] 6-Scene Stage Walkthrough recorder validated (output=${OUTPUT_MP4}, ports=:${OBS_PORT}/:${SF_PORT}/:${GRAF_PORT})."
+  exit 0
+fi
+
+trap cleanup EXIT INT TERM
 
 echo "[1/7] Ensuring GKE port-forwards (ax-observer:${OBS_PORT}, storefront:${SF_PORT}, grafana:${GRAF_PORT})..."
 if ! curl -sf "http://127.0.0.1:${OBS_PORT}/healthz" >/dev/null 2>&1; then

@@ -421,4 +421,3 @@ func TestPolyglotBackendServicesStandaloneHTTP500StackTracesAndHotReload(t *test
 		}
 	}
 }
-

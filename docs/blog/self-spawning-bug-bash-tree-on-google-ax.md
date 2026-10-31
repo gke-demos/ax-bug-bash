@@ -91,7 +91,7 @@ The live terminal recording below (`docs/assets/ax-live-gke-terminal.gif`) captu
 
 ## 3. The Three-Layer Substrate Stack on GKE (`BOM-19` and `BOM-20`)
 
-Running a self-spawning **Bug Bash Tree** in production requires coordinating low-level kernel sandboxes, container filesystems, and high-level agent task APIs. The architecture builds on the **Three-Layer Substrate Stack**, which separates sandbox virtualization from guest lifecycle conventions and declarative task orchestration:
+Running a self-spawning **Bug Bash Tree** in production requires coordinating low-level kernel sandboxes, container filesystems, and high-level agent task APIs. The architecture builds on the **Three-Layer Substrate Stack** (documented in [`docs/architecture/three-layer-substrate-env-ax.md`](../architecture/three-layer-substrate-env-ax.md) and [`docs/upstream/google-ax-v060-patches.md`](../upstream/google-ax-v060-patches.md)), which separates sandbox virtualization from guest lifecycle conventions and declarative task orchestration:
 
 ```mermaid
 flowchart TB
@@ -299,11 +299,12 @@ make run-local
 # 2. Run the 20-trajectory hermetic evaluation suite and manifest hygiene checks
 make eval
 
-# 3. Deploy to your active GKE cluster context (kubectl config current-context)
+# 3. Deploy to your active GKE cluster context (kubectl config current-context) and verify stage readiness
 make deploy
+make stage-ready
 
 # 4. Run the sequential live GKE 4x4 chaos soak and GCP dual-export verifier
 make eval-live-gke
 ```
 
-For a step-by-step walkthrough covering local simulation, writing a Go **Custom Runner** with `github.com/google/ax/runner.Run`, configuring the zero-secret **Model Gateway** fallback cascade, deploying to GKE, and inspecting the live chaos soak telemetry, follow our five-lab developer tutorial in [`docs/tutorial/build-a-self-spawning-bug-bash-tree.md`](../tutorial/build-a-self-spawning-bug-bash-tree.md).
+For a step-by-step walkthrough covering local simulation, writing a Go **Custom Runner** with `github.com/google/ax/runner.Run`, configuring the zero-secret **Model Gateway** fallback cascade, deploying to GKE, and inspecting the live chaos soak telemetry, follow our five-lab developer tutorial in [`docs/tutorial/build-a-self-spawning-bug-bash-tree.md`](../tutorial/build-a-self-spawning-bug-bash-tree.md), the live stage runbook in [`docs/stage-runbook.md`](../stage-runbook.md), and the architecture report in [`docs/showcase/architecture-report.md`](../showcase/architecture-report.md).

@@ -1,7 +1,7 @@
 ---
 type: Architecture Reference Guide (BOM-19)
 status: Implemented
-owners: [mofi]
+owners: [ax-bug-bash-maintainers]
 created: 2026-10-29
 code: "[gke-demos/ax-bug-bash](https://github.com/gke-demos/ax-bug-bash)"
 ---
@@ -180,3 +180,5 @@ To keep upstream CNCF documentation vendor-neutral while giving GKE users end-to
 | **1. Upstream CNCF `ate.dev` (`agent-substrate/substrate` & `agent-substrate/env`)** | Kubernetes platform engineers and sandbox integrators on any CNCF-conformant cluster | Vendor-neutral **Layer 1** (`ate.dev/v1` `WorkerPool`, `substrate.ateapi.v1.Control`, OpenFGA `AccessPolicy`, `EgressPolicy`, `SNAPSHOT_FIDELITY_VOLUMES`) and **Layer 2** (`agent-substrate/env` `/healthz:80` `WakeupProbe`, `atenet-router:443` mTLS, and `/workspace` volume semantics) from Sections 2, 3, and Rows 1 to 4 of the **Layer Selection Matrix**. |
 | **2. Upstream `google/ax/docs/` (`docs/concepts.md` & `docs/runner.md`)** | Agent framework authors and Go developers building task graphs and custom runners | **Layer 3** declarative `Workspace`, `Model`, and `Task` (`Task.spec.config`) contracts, `github.com/google/ax/runner.Run` (`OnCommandExit` + `SuspendTask`), recursive `parent_task` fan-out from Section 4, Rows 5 to 7 of the **Layer Selection Matrix**, and the three upstream compatibility PR blueprints in [`docs/upstream/google-ax-v060-patches.md`](../upstream/google-ax-v060-patches.md). |
 | **3. Google Cloud GKE & Gemini Enterprise Agent Platform Documentation** | Cloud architects running production agent fleets on GKE | GKE `gVisor` node pools and warm `WorkerPool` sizing for **compute obtainability**, GKE Workload Identity Federation for the zero-secret **Gemini Enterprise Agent Platform** **Model Gateway** (`gemini-3.8-flash` -> `3.7` -> `3.6` -> `3.5` cascade), Cloud Storage snapshot buckets, and dual-export observability to Google Cloud Logging and Google Cloud Managed Service for Prometheus. |
+
+For the end-to-end narrative, hands-on exercises, and live presenter walkthrough built on this three-layer stack, see [`docs/blog/self-spawning-bug-bash-tree-on-google-ax.md`](../blog/self-spawning-bug-bash-tree-on-google-ax.md), [`docs/tutorial/build-a-self-spawning-bug-bash-tree.md`](../tutorial/build-a-self-spawning-bug-bash-tree.md), [`docs/stage-runbook.md`](../stage-runbook.md), and [`GLOSSARY.md`](../../GLOSSARY.md).

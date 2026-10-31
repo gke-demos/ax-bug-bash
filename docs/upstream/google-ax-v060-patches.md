@@ -3,7 +3,7 @@
 > [!IMPORTANT]
 > - **Target Baseline**: `google/ax` (`4b7bf6f`) running on Google Kubernetes Engine (GKE) with **Agent Substrate `v0.6.1`** (`substrate.ateapi.v1.Control`) and `agent-substrate/env`.
 > - **Overlay Artifact**: [`deploy/ax-server/ax-server-v061.patch`](../../deploy/ax-server/ax-server-v061.patch), applied automatically by [`deploy/ax-server/build.sh`](../../deploy/ax-server/build.sh).
-> - **Purpose**: Give upstream `google/ax` maintainers three focused, self-contained PR blueprints ready to cherry-pick for Issues `#482`, `#511`, and `#518`, while letting developers build and run the patched `ax-server` binary today.
+> - **Purpose**: Give upstream `google/ax` maintainers three focused, self-contained PR blueprints ready to cherry-pick for Issues `#482`, `#511`, and `#518`, while letting developers build and run the patched `ax-server` binary today. See [`docs/architecture/three-layer-substrate-env-ax.md`](../architecture/three-layer-substrate-env-ax.md) and [`ADR-0013`](../adr/0013-upstream-google-ax-v060-compatibility-overlay.md) for how these patches bridge Layer 1 (`agent-substrate/substrate`), Layer 2 (`agent-substrate/env`), and Layer 3 (`google/ax`).
 
 ---
 

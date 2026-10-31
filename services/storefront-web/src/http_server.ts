@@ -777,7 +777,7 @@ function startServer(): void {
       proxyRawHttp(req, res, gitHttpBase);
       return;
     }
-    if (pathname === "/api/cart/checkout") {
+    if (pathname === "/api/cart/checkout" || pathname === "/api/checkout") {
       if (method !== "POST") {
         sendJson(res, 405, { error: "Method Not Allowed" });
         return;

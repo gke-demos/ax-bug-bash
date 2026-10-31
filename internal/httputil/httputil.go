@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -41,12 +42,23 @@ func EnvOr(key, fallback string) string {
 	return fallback
 }
 
-// EnsureGoBinOnPath returns an environment slice with /usr/local/google/home/mofi/.local/go/bin and /usr/local/go/bin prepended to PATH.
+// EnsureGoBinOnPath returns an environment slice with ~/.local/go/bin and /usr/local/go/bin prepended to PATH.
 func EnsureGoBinOnPath(baseEnv []string) []string {
 	if len(baseEnv) == 0 {
 		baseEnv = os.Environ()
 	}
 	curPath := os.Getenv("PATH")
-	newPath := "/usr/local/google/home/mofi/.local/go/bin:/usr/local/go/bin:" + curPath
-	return append(append([]string(nil), baseEnv...), "PATH="+newPath)
+	home, err := os.UserHomeDir()
+	localBins := "/usr/local/go/bin"
+	if err == nil && home != "" {
+		localBins = filepath.Join(home, ".local", "go", "bin") + ":" + filepath.Join(home, ".cargo", "bin") + ":/usr/local/go/bin"
+	}
+	newPath := localBins + ":" + curPath
+	out := make([]string, 0, len(baseEnv)+1)
+	for _, kv := range baseEnv {
+		if !strings.HasPrefix(kv, "PATH=") {
+			out = append(out, kv)
+		}
+	}
+	return append(out, "PATH="+newPath)
 }

@@ -171,6 +171,28 @@ func TestStorefrontScenariosMetricsLogsAndUI(t *testing.T) {
 	if checkoutRes.StatusCode != http.StatusOK {
 		t.Fatalf("expected happy-path checkout HTTP 200, got %d", checkoutRes.StatusCode)
 	}
+	if gotReqID := checkoutRes.Header.Get("X-Storefront-Request-ID"); gotReqID == "" {
+		t.Fatalf("expected non-empty X-Storefront-Request-ID header on checkout response")
+	}
+
+	// Verify /api/checkout route alias and X-Storefront-Request-ID propagation
+	aliasReq, err := http.NewRequest(http.MethodPost, srv.URL+"/api/checkout", bytes.NewReader(cartJSON))
+	if err != nil {
+		t.Fatalf("NewRequest /api/checkout failed: %v", err)
+	}
+	aliasReq.Header.Set("Content-Type", "application/json")
+	aliasReq.Header.Set("X-Storefront-Request-ID", "smoke-req-42")
+	aliasRes, err := http.DefaultClient.Do(aliasReq)
+	if err != nil {
+		t.Fatalf("POST /api/checkout failed: %v", err)
+	}
+	aliasRes.Body.Close()
+	if aliasRes.StatusCode != http.StatusOK {
+		t.Fatalf("expected /api/checkout alias HTTP 200, got %d", aliasRes.StatusCode)
+	}
+	if gotReqID := aliasRes.Header.Get("X-Storefront-Request-ID"); gotReqID != "smoke-req-42" {
+		t.Fatalf("X-Storefront-Request-ID = %q, want smoke-req-42", gotReqID)
+	}
 
 	// 3. Activate each of INC-101..INC-104 and verify HTTP 500, exact implicated service metrics & stack traces
 	for _, sc := range storefront.ScenarioCatalog() {
@@ -844,7 +866,3 @@ func TestPolyglotMeshDockerfileContractAndSecurityHygiene(t *testing.T) {
 		}
 	}
 }
-
-
-
-

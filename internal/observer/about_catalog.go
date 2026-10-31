@@ -132,7 +132,7 @@ type CatalogLifecycleStage struct {
 	ProtocolPayloadPreview string               `json:"protocol_payload_preview"`
 }
 
-// CatalogADRCard represents one of the 11 Architecture Decision Records with live runtime telemetry counters.
+// CatalogADRCard represents one of the 14 Architecture Decision Records with live runtime telemetry counters.
 type CatalogADRCard struct {
 	ID              string            `json:"id"`
 	Number          int               `json:"number"`
@@ -1163,14 +1163,14 @@ func BuildArchitectureTopologyCatalog(rt CatalogRuntimeTelemetry) ArchitectureTo
 			Title:    "Interactive 3-Tab SVG /about Architecture Catalog and Automated Drift Verification",
 			Status:   "Accepted",
 			Category: "UI & Routing",
-			Summary:  "Backs the /about page with a typed Go catalog (GET /api/about/catalog) and automated drift verification test suite checking all 11 ADRs, 5 service directories, 3 harness binaries, 4 cascade models, and non-overlapping SVG geometry.",
+			Summary:  "Backs the /about page with a typed Go catalog (GET /api/about/catalog) and automated drift verification test suite checking all 14 ADRs, 5 service directories, 3 harness binaries, 4 cascade models, and non-overlapping SVG geometry.",
 			KeyDecisions: []string{
 				"3 interactive SVG tabs: System Topology, Recursive TDD Lifecycle, Security & ADRs",
 				"Automated VerifyArchitectureCatalogDrift test guarding against doc/code drift",
 				"Stage-safe telemetry scrubbing removing cluster/project/bucket identifiers",
 			},
 			RelatedNodes:    []string{"ax-observer"},
-			RuntimeCounters: commonCounters(map[string]string{"catalog_nodes": "12 nodes / 11 edges", "catalog_adrs": "11 ADRs verified"}),
+			RuntimeCounters: commonCounters(map[string]string{"catalog_nodes": "12 nodes / 11 edges", "catalog_adrs": "14 ADRs verified"}),
 		},
 		{
 			ID:       "ADR-0011",

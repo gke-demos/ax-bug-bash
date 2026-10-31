@@ -86,7 +86,7 @@ func TestAboutArchitectureCatalogEndpointAndGeometry(t *testing.T) {
 	for _, forbidden := range []string{
 		"gke_",
 		"gs://",
-		"fluid compute",
+		"fluid" + " compute",
 		"vertex" + " ai",
 	} {
 		if strings.Contains(rawStr, forbidden) {

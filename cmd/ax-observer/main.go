@@ -151,7 +151,9 @@ func main() {
 
 	go func() {
 		<-ctx.Done()
-		_ = httpSrv.Close()
+		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = httpSrv.Shutdown(shutCtx)
 	}()
 
 	log.Printf("AX Observer (:3000) listening on http://%s (Storefront: %s, Grafana: %s, Mode: %s)", *observerAddr, sfPub, grafPub, obsSrv.ExecutionMode())

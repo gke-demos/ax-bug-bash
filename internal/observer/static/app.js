@@ -1079,7 +1079,7 @@
       });
     }
 
-    // Render Filterable 11-ADR Catalog
+    // Render Filterable 14-ADR Catalog
     var adrs = catalog.adrs || [];
     var filterBar = document.getElementById("adr-category-filters");
     if (filterBar) {

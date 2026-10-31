@@ -283,6 +283,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			"calls":    s.RecentCalls(),
 		})
 	case http.MethodPost:
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		var meta TaskSession
 		if err := json.NewDecoder(r.Body).Decode(&meta); err != nil || strings.TrimSpace(meta.TaskName) == "" {
 			writeJSONError(w, http.StatusBadRequest, "invalid_request", "valid task_name is required")
@@ -449,7 +450,9 @@ func (s *Server) UpsertSession(meta TaskSession) TaskSession {
 	}
 	cur.ZeroSecretVerified = true
 	cur.UpdatedAt = time.Now().UTC()
-	return *cur
+	cp := *cur
+	cp.LastCascadeTrace = append([]CascadeAttempt(nil), cur.LastCascadeTrace...)
+	return cp
 }
 
 // GetSession returns the current stats for a single AX Task session.
@@ -460,7 +463,9 @@ func (s *Server) GetSession(taskName string) (TaskSession, bool) {
 	if !ok {
 		return TaskSession{}, false
 	}
-	return *cur, true
+	cp := *cur
+	cp.LastCascadeTrace = append([]CascadeAttempt(nil), cur.LastCascadeTrace...)
+	return cp, true
 }
 
 // ListSessions returns all known AX Task sessions sorted by TaskName.
@@ -470,7 +475,9 @@ func (s *Server) ListSessions() []TaskSession {
 
 	out := make([]TaskSession, 0, len(s.sessions))
 	for _, sess := range s.sessions {
-		out = append(out, *sess)
+		cp := *sess
+		cp.LastCascadeTrace = append([]CascadeAttempt(nil), sess.LastCascadeTrace...)
+		out = append(out, cp)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].TaskName < out[j].TaskName
@@ -483,7 +490,11 @@ func (s *Server) RecentCalls() []CallRecord {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]CallRecord, len(s.calls))
-	copy(out, s.calls)
+	for i, c := range s.calls {
+		cp := c
+		cp.CascadeAttempts = append([]CascadeAttempt(nil), c.CascadeAttempts...)
+		out[i] = cp
+	}
 	return out
 }
 

@@ -86,8 +86,8 @@ type Supervisor struct {
 	http500Total         atomic.Uint64
 	lastReloadDurationMs atomic.Int64
 
-	nodeStripOnce      sync.Once
-	nodeSupportsStrip  bool
+	nodeStripOnce     sync.Once
+	nodeSupportsStrip bool
 }
 
 // New validates cfg, clones and builds the initial baseline revision, starts the loopback child process,

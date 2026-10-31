@@ -2,11 +2,11 @@
 
 **Recursive Sub-Task Fan-Out on `google/ax` and Agent Substrate `v0.6.0` on GKE**
 
-> *"A single task may be the whole job, or it may be the root of a large tree of tasks spawned as the agent breaks the problem down."* — `google/ax` (`docs/concepts.md`)
+> *"A single task may be the whole job, or it may be the root of a large tree of tasks spawned as the agent breaks the problem down."* (`google/ax`, `docs/concepts.md`)
 
-`ax-bug-bash` demonstrates a self-spawning hierarchical agent system built on **`google/ax`** and **Agent Substrate `v0.6.0`** on Google Kubernetes Engine (GKE). When a production error occurs in a standalone **5-service polyglot Retail Storefront** (`Node.js/TypeScript`, `Go`, `Python/FastAPI`, `Rust/Axum`), an in-cluster **Prometheus + Alertmanager + Loki + Grafana** monitoring stack detects the HTTP 500 spike within 3–5 seconds and fires an Alertmanager webhook to the **AX Observer**.
+`ax-bug-bash` demonstrates a self-spawning hierarchical agent system built on **`google/ax`** and **Agent Substrate `v0.6.0`** on Google Kubernetes Engine (GKE). When a production error occurs in a standalone **5-service polyglot Retail Storefront** (`Node.js/TypeScript`, `Go`, `Python/FastAPI`, `Rust/Axum`), an in-cluster **Prometheus + Alertmanager + Loki + Grafana** monitoring stack detects the HTTP 500 spike within 3 to 5 seconds and fires an Alertmanager webhook to the **AX Observer**.
 
-The AX Observer dispatches a **Root Task** (`triage-<id>`) on `google/ax`. The Root Task analyzes the multi-service stack traces, identifies **only the 2–3 implicated microservices** (never blindly all 5), and calls `ax-server` gRPC (`ax.v1alpha1.AX/CreateTask` + `ResumeTask`) to dynamically fan out isolated **Child Tasks** (`fixer-<id>-<service>`) across warm `ateworker-gvisor` sandboxes. Each Child Task executes a strict **Red-Green TDD cycle**—authoring a new failing **Regression Test** first (Red), patching the service code until all tests pass (Green), capturing its unified Git diff via the **Custom Runner** (`runner.Run` `OnCommandExit`), and calling `SuspendTask` so Agent Substrate `v0.6.0` immediately reclaims worker CPU and memory slots. The Root Task merges the verified patches and triggers a `< 10s` pre-warmed incremental rollout that heals the live Retail Storefront.
+The AX Observer dispatches a **Root Task** (`triage-<id>`) on `google/ax`. The Root Task analyzes the multi-service stack traces, identifies **only the 2 to 3 implicated microservices** (never blindly all 5), and calls `ax-server` gRPC (`ax.v1alpha1.AX/CreateTask` + `ResumeTask`) to dynamically fan out isolated **Child Tasks** (`fixer-<id>-<service>`) across warm `ateworker-gvisor` sandboxes. Each Child Task executes a strict **Red-Green TDD cycle**: authoring a new failing **Regression Test** first (Red), patching the service code until all tests pass (Green), capturing its unified Git diff via the **Custom Runner** (`runner.Run` `OnCommandExit`), and calling `SuspendTask` so Agent Substrate `v0.6.0` immediately reclaims worker CPU and memory slots. The Root Task merges the verified patches and triggers a `< 10s` pre-warmed incremental rollout that heals the live Retail Storefront.
 
 ---
 
@@ -52,17 +52,17 @@ flowchart TB
 
 ---
 
-## Three Decoupled Production Surfaces (`ADR-0001`)
+## Three Decoupled Production Surfaces ([`ADR-0001`](docs/adr/0001-three-decoupled-surfaces-and-subtle-production-incidents.md))
 
 | Surface | Default Port | Description |
 | :--- | :--- | :--- |
-| **1. Retail Storefront** | `http://localhost:3001` | Standalone 5-service polyglot e-commerce storefront (`storefront-web`, `checkout-service`, `shipping-service`, `pricing-service`, `inventory-service`) backed by an in-cluster Git server (`/git/storefront.git`). |
-| **2. Monitoring & Alerting Stack** | `http://localhost:3002/monitoring` | Upstream **Prometheus + Alertmanager + Loki + Grafana** with a 5-second scrape/evaluation window (`for: 0s`) and dual-export to Google Cloud Managed Service for Prometheus and Cloud Logging (`ADR-0002`). |
-| **3. AX Observer** | `http://localhost:3000` | Clean, modern web interface with path-based routing (`/`, `/workers`, `/about`), top-right icon-only Moon/Sun **Projector Light Mode** toggle, and a discrete `⌘K` Incident Scenario & Harness launcher (`ADR-0005`). |
+| **1. Retail Storefront** | `http://localhost:3001` | Standalone 5-service polyglot e-commerce storefront (`storefront-web`, `checkout-service`, `shipping-service`, `pricing-service`, `inventory-service`) backed by an in-cluster Git server (`/git/storefront.git`) and PID-1 **Hot-Reload Supervisor** ([`ADR-0009`](docs/adr/0009-polyglot-http-mesh-and-zero-downtime-git-hot-reload.md)). |
+| **2. Monitoring & Alerting Stack** | `http://localhost:3002/monitoring` | Upstream **Prometheus + Alertmanager + Loki + Grafana** with a 5-second scrape/evaluation window (`for: 0s`) and dual-export to Google Cloud Managed Service for Prometheus and Cloud Logging ([`ADR-0002`](docs/adr/0002-in-cluster-prometheus-alertmanager-loki-grafana-with-gcp-export.md)). |
+| **3. AX Observer** | `http://localhost:3000` | Clean, modern web interface with path-based routing (`/`, `/workers`, `/about`), top-right icon-only Moon/Sun **Projector Light Mode** toggle, and a discrete `⌘K` Incident Scenario & Harness launcher ([`ADR-0005`](docs/adr/0005-clean-modern-ax-observer-ui-and-routing.md), [`ADR-0010`](docs/adr/0010-interactive-about-architecture-catalog-and-drift-verification.md)). |
 
 ---
 
-## Four Subtle Multi-Service Incident Scenarios (`ADR-0003`)
+## Four Subtle Multi-Service Incident Scenarios ([`ADR-0003`](docs/adr/0003-polyglot-five-service-storefront-and-incident-catalog.md))
 
 All 5 microservices pass their pre-existing unit and integration tests on the happy path before an incident is triggered (`./services/run-service-tests.sh --all`). Each **Incident Scenario** is a realistic multi-service edge case missed by baseline CI:
 
@@ -75,7 +75,7 @@ All 5 microservices pass their pre-existing unit and integration tests on the ha
 
 ---
 
-## Three Coding Harnesses & Zero-Secret Model Gateway (`ADR-0007`)
+## Three Coding Harnesses & Zero-Secret Model Gateway ([`ADR-0007`](docs/adr/0007-multi-harness-sandbox-and-gemini-flash-fallback-cascade.md))
 
 `harnesses/Dockerfile.task-runner` pre-installs three CLI **Coding Harnesses** inside the `ateworker-gvisor` sandbox image:
 
@@ -84,7 +84,7 @@ All 5 microservices pass their pre-existing unit and integration tests on the ha
 3. **Pi (`pi`)**: `@mariozechner/pi-coding-agent` speaking OpenAI-compatible chat completions (`/s/{task_name}/v1/chat/completions`).
 4. **Multi-Harness Parallel Mode (`multi`)**: Dynamically assigns `antigravity`, `opencode`, and `pi` across sibling Child Tasks in parallel inside the same Bug Bash Tree.
 
-All model traffic routes through the in-cluster **Zero-Secret Gemini Enterprise Agent Platform Model Gateway** (`:8080`), which authenticates via GKE Workload Identity (`ax-sandbox-token` inside the sandbox) and enforces an ordered fallback cascade:
+All model traffic routes through the in-cluster **Zero-Secret Gemini Enterprise Agent Platform Model Gateway** (`:8080`), which authenticates via GKE Workload Identity (`ax-sandbox-token` inside the sandbox) and enforces an ordered fallback cascade for **compute obtainability**:
 
 ```text
 gemini-3.8-flash  →  gemini-3.7-flash  →  gemini-3.6-flash  →  gemini-3.5-flash  (→  FIXTURE offline CI fallback)
@@ -92,7 +92,7 @@ gemini-3.8-flash  →  gemini-3.7-flash  →  gemini-3.6-flash  →  gemini-3.5-
 
 ---
 
-## Agent Substrate `v0.6.0` & `google/ax` Hardening (`ADR-0006` & `ADR-0013`)
+## Agent Substrate `v0.6.0` & `google/ax` Hardening ([`ADR-0006`](docs/adr/0006-agent-substrate-v060-and-ax-deployment-hardening.md) & [`ADR-0013`](docs/adr/0013-upstream-google-ax-v060-compatibility-overlay.md))
 
 `manifests/ax-v060-overlay.yaml`, `deploy/ax-server/ax-server-v061.patch`, and `internal/bugbash/runner.go` bake in three production mitigations for `google/ax` on **Agent Substrate `v0.6.0+`** (documented in [`docs/upstream/google-ax-v060-patches.md`](docs/upstream/google-ax-v060-patches.md)):
 
@@ -102,8 +102,9 @@ gemini-3.8-flash  →  gemini-3.7-flash  →  gemini-3.6-flash  →  gemini-3.5-
 
 ---
 
-## Documentation, Blog Post & Live GKE Stage Walkthrough (`ADR-0012` through `ADR-0014`)
+## Documentation, Blog Post & Live GKE Stage Walkthrough ([`ADR-0012`](docs/adr/0012-bom20-blog-tutorial-and-stage-walkthrough-contract.md) through [`ADR-0014`](docs/adr/0014-bom19-three-layer-architecture-guide-and-stage-warmup-gate.md))
 
+- **Domain Glossary & Agent Context**: [`GLOSSARY.md`](GLOSSARY.md) defines the repository's canonical terms, and [`AGENTS.md`](AGENTS.md) indexes all 14 ADRs ([`ADR-0001`](docs/adr/0001-three-decoupled-surfaces-and-subtle-production-incidents.md) through [`ADR-0014`](docs/adr/0014-bom19-three-layer-architecture-guide-and-stage-warmup-gate.md)) and developer workflows.
 - **Three-Layer Architecture Guide (`BOM-19`)**: [`docs/architecture/three-layer-substrate-env-ax.md`](docs/architecture/three-layer-substrate-env-ax.md) specifies the CRD, gRPC, and container-boundary contracts across Layer 1 (`agent-substrate/substrate`), Layer 2 (`agent-substrate/env`), and Layer 3 (`google/ax`), paired with a 7-workload **Layer Selection Matrix** and cross-doc mapping for `ate.dev`, `google/ax/docs/`, and Google Cloud Docs.
 - **Flagship Technical Blog Post (`BOM-20`)**: [`docs/blog/self-spawning-bug-bash-tree-on-google-ax.md`](docs/blog/self-spawning-bug-bash-tree-on-google-ax.md) walks through the 7-section narrative, the **Three-Layer Substrate Stack**, multi-harness Red-Green TDD against the zero-secret **Model Gateway**, `< 3s` selective Git hot-reload, and measured GKE latency benchmarks (`80ms` clone, `4ms` `go test`, `42.6ms` `SNAPSHOT_FIDELITY_VOLUMES` checkpoint, `61ms` slot reclamation).
 - **Five-Lab Hands-On Developer Tutorial**: [`docs/tutorial/build-a-self-spawning-bug-bash-tree.md`](docs/tutorial/build-a-self-spawning-bug-bash-tree.md) provides a step-by-step developer walkthrough from local `SIMULATED` mode (`make run-local` and `make eval`) through authoring a Go **Custom Runner** (`runner.Run`, `OnCommandExit`, `SuspendTask`), configuring the zero-secret **Model Gateway**, deploying to GKE (`make deploy`), and verifying the live `4x4` chaos soak (`make eval-live-gke`).
@@ -123,7 +124,7 @@ gemini-3.8-flash  →  gemini-3.7-flash  →  gemini-3.6-flash  →  gemini-3.5-
 make run-local
 ```
 
-- **AX Observer**: `http://localhost:3000` (press `⌘K` / `Ctrl+K` to trigger `INC-101`–`INC-104` or `RANDOM` across `antigravity`, `opencode`, `pi`, or `multi`)
+- **AX Observer**: `http://localhost:3000` (press `⌘K` / `Ctrl+K` to trigger `INC-101` through `INC-104` or `RANDOM` across `antigravity`, `opencode`, `pi`, or `multi`)
 - **Retail Storefront**: `http://localhost:3001`
 - **Monitoring & Alertmanager Preview**: `http://localhost:3002/monitoring`
 
@@ -132,6 +133,9 @@ make run-local
 ```bash
 # Run polyglot microservice baseline tests + all Go package tests
 make test
+
+# Run fast (< 5s) dry-run manifest checks and HTTP/SSE/Gateway smoke suite
+make smoke
 
 # Run the fast 20-trajectory SIMULATED evaluation suite (< 60s):
 # - 16 trajectories: 4 Incident Scenarios (INC-101..104) x 4 Harness Modes (antigravity, opencode, pi, multi)
@@ -146,7 +150,7 @@ make eval
 make eval-live-gke
 ```
 
-### 3. Deploy to GKE (`kubectl config current-context`)
+### 3. Deploy to GKE & Run Stage Warmup Gate (`kubectl config current-context`)
 
 ```bash
 # Verify rendered manifests and repository hygiene gate (dry-run)
@@ -154,4 +158,7 @@ make verify-manifests
 
 # Deploy to active GKE cluster context
 make deploy
+
+# Verify all 6 pre-stage warmup checks, port-forwards (:3000, :3001, :3002), and baseline-v1 reset
+make stage-ready
 ```

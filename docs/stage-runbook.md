@@ -1,6 +1,6 @@
 # Live Stage Presenter Runbook (`ax-bug-bash`)
 
-This runbook walks a live stage presenter through a deterministic 5-to-6-minute demonstration of **The Self-Spawning Bug Bash Tree** across all three decoupled production surfaces on Google Kubernetes Engine (GKE).
+This runbook walks a live stage presenter through a deterministic 5-to-6-minute demonstration of **The Self-Spawning Bug Bash Tree** across all three decoupled production surfaces on Google Kubernetes Engine (GKE). For background architecture and hands-on setup, see [`README.md`](../README.md), [`docs/architecture/three-layer-substrate-env-ax.md`](architecture/three-layer-substrate-env-ax.md), [`docs/blog/self-spawning-bug-bash-tree-on-google-ax.md`](blog/self-spawning-bug-bash-tree-on-google-ax.md), [`docs/tutorial/build-a-self-spawning-bug-bash-tree.md`](tutorial/build-a-self-spawning-bug-bash-tree.md), and [`docs/showcase/slides.html`](showcase/slides.html).
 
 ## 1. T-Minus 5 Minutes: Running the Stage Warmup Gate (`make stage-ready`)
 

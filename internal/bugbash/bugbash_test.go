@@ -1591,8 +1591,3 @@ func TestSandboxRootTaskGitBranchVerificationGateParallelMultiRaceAndMissingBran
 		}
 	})
 }
-
-
-
-
-

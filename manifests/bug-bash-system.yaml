@@ -43,6 +43,13 @@ spec:
             exec:
               command: ["pg_isready", "-U", "ax", "-d", "ax"]
             periodSeconds: 3
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "ax", "-d", "ax"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
           resources:
             requests:
               cpu: 50m
@@ -176,6 +183,8 @@ spec:
               port: 8080
             initialDelaySeconds: 5
             periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
           volumeMounts:
             - mountPath: /var/run/secrets/ateapi
               name: ate-token
@@ -289,6 +298,8 @@ spec:
               port: 8080
             initialDelaySeconds: 3
             periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
           resources:
             requests:
               cpu: 50m
@@ -394,6 +405,8 @@ spec:
               port: 3001
             initialDelaySeconds: 5
             periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
           volumeMounts:
             - name: git-workspace
               mountPath: /var/lib/storefront-git
@@ -610,6 +623,8 @@ spec:
               port: 3000
             initialDelaySeconds: 3
             periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
           volumeMounts:
             - mountPath: /var/run/secrets/ateapi
               name: ate-token

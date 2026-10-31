@@ -19,7 +19,9 @@ Single-context repo (most repos):
 ├── GLOSSARY.md
 ├── docs/adr/
 │   ├── 0001-three-decoupled-surfaces-and-subtle-production-incidents.md
-│   └── 0002-in-cluster-prometheus-alertmanager-loki-grafana-with-gcp-export.md
+│   ├── 0002-in-cluster-prometheus-alertmanager-loki-grafana-with-gcp-export.md
+│   ├── ...
+│   └── 0014-bom19-three-layer-architecture-guide-and-stage-warmup-gate.md
 └── ...
 ```
 

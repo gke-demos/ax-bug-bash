@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export PATH="/usr/local/google/home/mofi/.local/go/bin:$HOME/.cargo/bin:$PATH"
+export PATH="${HOME}/.local/go/bin:${HOME}/.cargo/bin:${PATH}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET="${1:---all}"

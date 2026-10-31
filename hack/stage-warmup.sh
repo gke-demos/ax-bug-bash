@@ -42,6 +42,8 @@ if [[ -f "${PORTS_FILE}" ]]; then
 fi
 
 START_EPOCH="$(date +%s)"
+STAGE_TMP_DIR="$(mktemp -d -t ax-stage-warmup-XXXXXX)"
+trap 'rm -rf "${STAGE_TMP_DIR}"' EXIT INT TERM
 
 echo "==> [Gate 1/6] Verifying GKE Control Plane, Polyglot Storefront Mesh & Warm WorkerPool..."
 kubectl -n ax-system rollout status statefulset/ax-postgres --timeout=30s >/dev/null
@@ -124,14 +126,14 @@ GRAF_PORT=${GRAF_PORT}
 EOF
 
 echo "==> [Gate 3/6] Resetting Retail Storefront to clean baseline-v1 revision..."
-RESET_JSON="$(curl -sf -X POST "http://127.0.0.1:${OBS_PORT}/api/incidents/reset" \
+curl -sf -X POST "http://127.0.0.1:${OBS_PORT}/api/incidents/reset" \
   -H "Content-Type: application/json" \
-  -d '{"default_harness":"multi"}')"
-SF_HEALTH_JSON="$(curl -sf "http://127.0.0.1:${SF_PORT}/healthz")"
-python3 - "${RESET_JSON}" "${SF_HEALTH_JSON}" << 'EOF'
-import json, sys
-reset_data = json.loads(sys.argv[1])
-sf_health = json.loads(sys.argv[2])
+  -d '{"default_harness":"multi"}' > "${STAGE_TMP_DIR}/reset.json"
+curl -sf "http://127.0.0.1:${SF_PORT}/healthz" > "${STAGE_TMP_DIR}/sf_health.json"
+python3 - "${STAGE_TMP_DIR}/reset.json" "${STAGE_TMP_DIR}/sf_health.json" << 'EOF'
+import json, pathlib, sys
+reset_data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+sf_health = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
 if reset_data.get("status") != "reset":
     raise SystemExit(f"Reset status mismatch: {reset_data.get('status')!r}")
 if sf_health.get("status") != "ok" or sf_health.get("service") != "storefront-web":
@@ -141,10 +143,10 @@ EOF
 
 echo "==> [Gate 4/6] Verifying zero active incidents or firing alerts..."
 for _ in $(seq 1 15); do
-  OBS_STATE_JSON="$(curl -sf "http://127.0.0.1:${OBS_PORT}/api/state")"
-  ACTIVE_INC="$(python3 - "${OBS_STATE_JSON}" << 'EOF'
-import json, sys
-data = json.loads(sys.argv[1])
+  curl -sf "http://127.0.0.1:${OBS_PORT}/api/state" > "${STAGE_TMP_DIR}/state.json"
+  ACTIVE_INC="$(python3 - "${STAGE_TMP_DIR}/state.json" << 'EOF'
+import json, pathlib, sys
+data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 print(data.get("active_incident", ""))
 EOF
 )"
@@ -156,10 +158,10 @@ done
 echo "    Alert drain verified (active_incident='none')."
 
 echo "==> [Gate 5/6] Verifying LIVE_GKE execution mode and warm sandbox telemetry on /api/workers..."
-WORKERS_JSON="$(curl -sf "http://127.0.0.1:${OBS_PORT}/api/workers")"
-python3 - "${WORKERS_JSON}" << 'EOF'
-import json, sys
-w = json.loads(sys.argv[1])
+curl -sf "http://127.0.0.1:${OBS_PORT}/api/workers" > "${STAGE_TMP_DIR}/workers.json"
+python3 - "${STAGE_TMP_DIR}/workers.json" << 'EOF'
+import json, pathlib, sys
+w = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 mode = w.get("execution_mode", "")
 workers = w.get("workers", [])
 if mode != "LIVE_GKE":
@@ -170,10 +172,10 @@ print(f"    /api/workers verified: execution_mode={mode}, warm_slots={len(worker
 EOF
 
 echo "==> [Gate 6/6] Verifying 14-ADR /about Architecture Topology Catalog..."
-CATALOG_JSON="$(curl -sf "http://127.0.0.1:${OBS_PORT}/api/about/catalog")"
-python3 - "${CATALOG_JSON}" << 'EOF'
-import json, sys
-cat = json.loads(sys.argv[1])
+curl -sf "http://127.0.0.1:${OBS_PORT}/api/about/catalog" > "${STAGE_TMP_DIR}/catalog.json"
+python3 - "${STAGE_TMP_DIR}/catalog.json" << 'EOF'
+import json, pathlib, sys
+cat = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 adrs = cat.get("adrs", [])
 nodes = cat.get("nodes", [])
 edges = cat.get("edges", [])

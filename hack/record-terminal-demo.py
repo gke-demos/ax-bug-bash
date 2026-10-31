@@ -397,6 +397,10 @@ def render_html_frame(step_idx: int, total_steps: int, blocks: list[tuple[str, s
 
 
 def main() -> None:
+    if "--dry-run" in os.sys.argv[1:]:
+        print(f"==> [DRY-RUN] Terminal demo GIF recorder validated (target={OUTPUT_GIF.relative_to(REPO_ROOT)}).")
+        return
+
     scrub = build_stage_scrubber()
     telemetry = capture_live_cluster_telemetry(scrub)
 

@@ -1,7 +1,7 @@
 ---
 type: Architecture & Benchmark Report
 status: Implemented
-owners: [mofi]
+owners: [ax-bug-bash-maintainers]
 created: 2026-10-29
 code: "[gke-demos/ax-bug-bash](https://github.com/gke-demos/ax-bug-bash)"
 ---
@@ -17,13 +17,13 @@ code: "[gke-demos/ax-bug-bash](https://github.com/gke-demos/ax-bug-bash)"
 
 ## 1. Executive Summary & Three Decoupled Surfaces
 
-`ax-bug-bash` (*The Self-Spawning Bug Bash Tree*) is the flagship reference implementation for **BOM-19** (*Three-layer architecture guide for `substrate`, `env`, and `ax`*) and **BOM-20** (*Declarative workspaces, goal bootstrap, and custom `ax-task-runner` blog and tutorial*). Instead of embedding a mock target inside a chat window, the system runs as three independent, browser-accessible production surfaces on Google Kubernetes Engine (GKE):
+`ax-bug-bash` (*The Self-Spawning Bug Bash Tree*) is the flagship reference implementation for **BOM-19** ([`docs/architecture/three-layer-substrate-env-ax.md`](../architecture/three-layer-substrate-env-ax.md)) and **BOM-20** ([`docs/blog/self-spawning-bug-bash-tree-on-google-ax.md`](../blog/self-spawning-bug-bash-tree-on-google-ax.md), [`docs/tutorial/build-a-self-spawning-bug-bash-tree.md`](../tutorial/build-a-self-spawning-bug-bash-tree.md), and [`docs/stage-runbook.md`](../stage-runbook.md)). Instead of embedding a mock target inside a chat window, the system runs as three independent, browser-accessible production surfaces on Google Kubernetes Engine (GKE):
 
 | Surface | Default Endpoint | Core Responsibilities |
 | :--- | :--- | :--- |
 | **1. Retail Storefront** | `http://localhost:3001` | 5 real microservices (`storefront-web` in Node.js/TypeScript, `checkout-service` in Go, `shipping-service` in Go, `pricing-service` in Python/FastAPI, `inventory-service` in Rust/Axum) backed by an in-cluster Git Smart-HTTP server (`/git/storefront.git`) and a PID-1 **Hot-Reload Supervisor**. |
 | **2. Observability Stack** | `http://localhost:3002` | In-cluster Prometheus (`5s` scrape / `[15s]` evaluation window), Alertmanager v4 webhook dispatcher, Loki LogQL stack trace ingestion, pre-provisioned Grafana (`ax-bug-bash-storefront`), and dual-export to Google Cloud Managed Service for Prometheus and Cloud Logging. |
-| **3. AX Observer** | `http://localhost:3000` | Clean web UI with path-based routing (`/`, `/workers`, `/about`), a 3-tab interactive SVG **Architecture Topology Catalog** (`GET /api/about/catalog` verifying `ADR-0001` through `ADR-0013`), an icon-only Sun/Moon **Projector Light Mode** toggle, and a `Cmd+K` Scenario & Harness Launcher. |
+| **3. AX Observer** | `http://localhost:3000` | Clean web UI with path-based routing (`/`, `/workers`, `/about`), a 3-tab interactive SVG **Architecture Topology Catalog** (`GET /api/about/catalog` verifying `ADR-0001` through `ADR-0014`), an icon-only Sun/Moon **Projector Light Mode** toggle, and a `Cmd+K` Scenario & Harness Launcher. |
 
 ```mermaid
 architecture-beta
@@ -121,7 +121,7 @@ To design for **compute obtainability** across regions and quota tiers on **Gemi
 
 ## 5. Upstream `google/ax` Compatibility Overlay (`ADR-0013`)
 
-Running `google/ax` (`4b7bf6f`) against **Agent Substrate `v0.6.1`** (`substrate.ateapi.v1.Control`) on a live GKE cluster surfaced three cross-layer lifecycle issues. We packaged the fixes as a clean, reproducible patch in [`deploy/ax-server/ax-server-v061.patch`](https://github.com/gke-demos/ax-bug-bash/blob/main/deploy/ax-server/ax-server-v061.patch) and documented three standalone upstream PR blueprints in [`docs/upstream/google-ax-v060-patches.md`](https://github.com/gke-demos/ax-bug-bash/blob/main/docs/upstream/google-ax-v060-patches.md):
+Running `google/ax` (`4b7bf6f`) against **Agent Substrate `v0.6.1`** (`substrate.ateapi.v1.Control`) on a live GKE cluster surfaced three cross-layer lifecycle issues. We packaged the fixes as a clean, reproducible patch in [`deploy/ax-server/ax-server-v061.patch`](../../deploy/ax-server/ax-server-v061.patch) and documented three standalone upstream PR blueprints in [`docs/upstream/google-ax-v060-patches.md`](../upstream/google-ax-v060-patches.md):
 
 | Upstream Issue | Root Cause in Upstream `google/ax` (`4b7bf6f`) | Overlay Fix in `deploy/ax-server/ax-server-v061.patch` |
 | :--- | :--- | :--- |
